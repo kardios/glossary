@@ -19,9 +19,9 @@ def extract_text_from_pdf(pdf_file):
         full_text = "\n\n".join(page.get_text() for page in doc)
     return full_text
 
-# --- PROMPTS ---
 MAX_TERMS = 16
 
+# --- PROMPTS ---
 def prompt_glossary(full_text, max_terms=MAX_TERMS):
     return (
         f"Extract up to {max_terms} important glossary terms or concepts from the following document.\n"
@@ -76,7 +76,6 @@ def get_pdf_title_from_content(full_text, max_words=8, chunk_size=1000):
     except Exception:
         return "Untitled Document"
 
-# --- GLOSSARY & HIERARCHY GENERATION ---
 def get_glossary(full_text, max_terms=MAX_TERMS):
     input_prompt = prompt_glossary(full_text, max_terms)
     response = client.responses.create(model="gpt-4.1", input=input_prompt)
@@ -91,7 +90,6 @@ def get_glossary(full_text, max_terms=MAX_TERMS):
 def get_hierarchical_bubble(full_text):
     prompt = prompt_hierarchical_bubble(full_text)
     response = client.responses.create(model="gpt-4.1", input=prompt)
-    # Defensive: try to extract JSON object
     raw = response.output_text
     first = raw.find('{')
     last = raw.rfind('}')
@@ -100,7 +98,6 @@ def get_hierarchical_bubble(full_text):
             return json.loads(raw[first:last+1])
         except Exception:
             pass
-    # fallback: try to parse whatever's there
     return {}
 
 def glossary_to_csv(glossary):
@@ -110,7 +107,6 @@ def glossary_to_csv(glossary):
     ])
     return df.to_csv(index=False)
 
-# --- BUBBLE MAP RENDERING ---
 def create_glossary_mindmap_html(glossary, root_title="Glossary"):
     nodes = [
         {"id": root_title, "group": 0}
@@ -238,7 +234,6 @@ def create_glossary_mindmap_html(glossary, root_title="Glossary"):
     return mindmap_html
 
 def create_hierarchical_bubble_html(tree_data):
-    # Uses D3.js "pack" layout for hierarchical bubble map
     data_js = json.dumps(tree_data)
     html = f"""
     <div id="bubbletree"></div>
