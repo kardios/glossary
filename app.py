@@ -28,8 +28,9 @@ def extract_text_from_pdf(pdf_file):
         full_text = "\n\n".join(page.get_text() for page in doc)
     return full_text
 
-# --- PDF TITLE OR GIST EXTRACTION ---
+# --- FORCE SHORT GPT-SUMMARIZED TITLE ---
 def get_pdf_title(pdf_file, full_text):
+    # Step 1: Extract raw title/gist from PDF
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
             tmpfile.write(pdf_file.read())
@@ -37,27 +38,29 @@ def get_pdf_title(pdf_file, full_text):
             doc = fitz.open(tmpfile.name)
             title = doc.metadata.get("title")
             if title and title.strip() and title.lower() != "untitled":
-                return title.strip()
-            # Fallback: first non-blank line of first page
-            first_page_text = doc[0].get_text().strip()
-            for line in first_page_text.splitlines():
-                if line.strip():
-                    return line.strip()
+                raw_title = title.strip()
+            else:
+                first_page_text = doc[0].get_text().strip()
+                raw_title = next((line.strip() for line in first_page_text.splitlines() if line.strip()), "Document")
     except Exception:
-        pass
-    # Last resort: use GPT-4.1 to suggest a title
+        raw_title = "Document"
+    # Step 2: Force short GPT summary for root node (8 words max)
     try:
         prompt = (
-            "Provide a concise, informative title (max 10 words) for the following document:\n"
-            + full_text[:2000]
+            "Summarize this document title or main topic in a concise phrase for a mindmap root node. "
+            "Use no more than 8 words, and be specific and clear.\n"
+            f"Original title or gist: {raw_title}"
         )
         response = client.responses.create(
             model="gpt-4.1",
             input=prompt,
         )
-        return response.output_text.strip().split("\n")[0]
+        short_title = response.output_text.strip().split("\n")[0]
+        # Optionally enforce the word limit
+        short_title = ' '.join(short_title.split()[:8])
+        return short_title
     except Exception:
-        return "Document"
+        return raw_title if len(raw_title.split()) <= 8 else "Document"
 
 # --- GLOSSARY EXTRACTION (GPT-4.1 Responses API) ---
 def get_glossary_via_gpt41(full_text, max_terms=20):
@@ -147,7 +150,7 @@ def create_mindmap_html(glossary, root_title="Glossary"):
         .attr("class", "node");
 
     node.append("circle")
-        .attr("r", d => d.group === 0 ? 100 : 75)
+        .attr("r", d => d.group === 0 ? 110 : 75)
         .attr("fill", d => d.group === 0 ? "#eaf0fe" : "#fff")
         .attr("stroke", "#528fff").attr("stroke-width", 3)
         .on("mouseover", function(e, d) {{
@@ -168,13 +171,13 @@ def create_mindmap_html(glossary, root_title="Glossary"):
             }}
         }});
 
-    // Text wrapping for node labels
+    // Text wrapping for node labels with strong vertical centering for root
     node.append("text")
         .attr("text-anchor", "middle")
-        .style("font-size", d => d.group === 0 ? "1.5em" : "1.08em")
-        .selectAll("tspan")
-        .data(d => {{
-            const maxChars = d.group === 0 ? 28 : 16;
+        .style("font-size", d => d.group === 0 ? "1.4em" : "1.08em")
+        .each(function(d) {{
+            const text = d3.select(this);
+            const maxChars = d.group === 0 ? 14 : 16;
             const words = d.id.split(' ');
             let lines = [];
             let current = '';
@@ -187,12 +190,14 @@ def create_mindmap_html(glossary, root_title="Glossary"):
                 }}
             }});
             if (current.trim()) lines.push(current.trim());
-            return lines;
-        }})
-        .enter().append("tspan")
-        .attr("x", 0)
-        .attr("dy", (d, i) => i === 0 ? "0em" : "1.1em")
-        .text(d => d);
+            let startDy = d.group === 0 ? -((lines.length - 1) / 2) * 1.1 : 0;
+            lines.forEach((line, i) => {{
+                text.append("tspan")
+                    .attr("x", 0)
+                    .attr("dy", i === 0 ? `${startDy}em` : "1.1em")
+                    .text(line);
+            }});
+        }});
 
     // DRAG BEHAVIOR
     node.call(
