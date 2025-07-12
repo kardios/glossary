@@ -330,21 +330,22 @@ if uploaded_file and concept_map and structure_map:
         concept_tree = concept_map_to_tree(concept_map, root_title=pdf_title)
         mindmap_html = create_multilevel_mindmap_html(concept_tree, center_title=pdf_title)
         st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
-        # Download glossary as TXT
+        # Download concept map as TXT
         txt_data = concept_map_txt(concept_map)
         st.sidebar.download_button(
-            label="Download Glossary as TXT",
+            label="Download Concept Map as TXT",
             data=txt_data,
-            file_name="glossary.txt",
+            file_name="concept_map.txt",
             mime="text/plain"
         )
     elif view_mode == "Structure Map":
         if structure_map and structure_map.get("children"):
             mindmap_html = create_multilevel_mindmap_html(structure_map, center_title=structure_map.get("name", "Root"))
             st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
+            # Download structure map as TXT
             txt_data = structure_map_txt(structure_map)
             st.sidebar.download_button(
-                label="Download Structure Outline as TXT",
+                label="Download Structure Map as TXT",
                 data=txt_data,
                 file_name="structure_map.txt",
                 mime="text/plain"
