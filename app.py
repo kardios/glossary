@@ -4,15 +4,13 @@ import pandas as pd
 import json
 import tempfile
 from openai import OpenAI
-from streamlit_js_eval import streamlit_js_eval
 from streamlit_modal import Modal
 
 # --- OPENAI SETUP ---
-client = OpenAI()  # Uses env var OPENAI_API_KEY
+client = OpenAI()
 
 st.set_page_config(page_title="PDF Glossary Mindmap", layout="wide")
 st.title("🧠 PDF Glossary Mindmap Explorer")
-
 st.write("Streamlit version:", st.__version__)
 
 # --- PDF UPLOAD ---
@@ -153,11 +151,6 @@ def create_mindmap_html(glossary, root_title="Glossary"):
         }})
         .on("mouseout", function(e, d) {{
             tooltip.style("opacity", 0);
-        }})
-        .on("click", function(e, d) {{
-            if(d.group !== 0) {{
-                window.parent.postMessage({{type:'mindmap_click', term:d.id}}, '*');
-            }}
         }});
 
     // Text wrapping for node labels with vertical centering for root
@@ -237,8 +230,6 @@ if "full_text" not in st.session_state:
     st.session_state.full_text = ""
 if "pdf_title" not in st.session_state:
     st.session_state.pdf_title = None
-if "clicked_term" not in st.session_state:
-    st.session_state.clicked_term = None
 
 # --- MAIN WORKFLOW ---
 if uploaded_file:
@@ -254,7 +245,7 @@ glossary = st.session_state.get("glossary")
 full_text = st.session_state.get("full_text", "")
 pdf_title = st.session_state.get("pdf_title", "Document")
 
-# --- SIDEBAR: CSV DOWNLOAD ONLY ---
+# --- SIDEBAR: CSV & SUMMARY SELECT ---
 if glossary:
     csv_data = glossary_to_csv(glossary)
     st.sidebar.download_button(
@@ -263,46 +254,23 @@ if glossary:
         file_name="glossary.csv",
         mime="text/csv"
     )
+    st.sidebar.write("---")
+    st.sidebar.subheader("Glossary Term Summary")
+    selected_term = st.sidebar.selectbox(
+        "Click a glossary term to see summary (with citations):",
+        options=[item["term"] for item in glossary]
+    )
+    if selected_term:
+        with st.sidebar:
+            with st.spinner(f"Summarizing '{selected_term}' (with web citations)..."):
+                summary = get_summary_with_web_search(selected_term, full_text)
+            st.markdown(f"**{selected_term}**")
+            st.markdown(summary, unsafe_allow_html=True)
 
 # --- MINDMAP ---
 if glossary:
     st.subheader(f"Glossary Mindmap (Root: {pdf_title})")
     mindmap_html = create_mindmap_html(glossary, root_title=pdf_title)
-    st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False, allow_scripts=True)
-
-    # Listen for JS bubble click events
-    clicked_term = streamlit_js_eval(
-        js_expressions="""
-        new Promise(resolve => {
-            window.addEventListener('message', function handler(e) {
-                if (e.data && e.data.type === 'mindmap_click') {
-                    resolve(e.data.term);
-                    window.removeEventListener('message', handler);
-                }
-            });
-        })
-        """,
-        key="mindmap_click",
-    )
-    if clicked_term:
-        st.session_state.clicked_term = clicked_term
-
-# --- MODAL SUMMARY ON TERM CLICK ---
-if st.session_state.get("clicked_term"):
-    term = st.session_state.clicked_term
-    modal = Modal(term, key=f"modal_{term}", padding=20)
-    modal.open()
-    if modal.is_open():
-        with modal.container():
-            with st.spinner(f"Summarizing '{term}' (with web citations)..."):
-                summary = get_summary_with_web_search(term, full_text)
-            st.markdown(f"### {term}")
-            st.markdown(summary, unsafe_allow_html=True)
-            if uploaded_file:
-                st.markdown(
-                    f'<a href="data:application/pdf;base64,{uploaded_file.getvalue().decode("ISO-8859-1")}" download="{uploaded_file.name}" target="_blank" style="font-weight:bold;">Open PDF</a>',
-                    unsafe_allow_html=True
-                )
-    st.session_state.clicked_term = None
+    st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)  # No allow_scripts
 
 st.caption("Powered by OpenAI GPT-4.1 with live web search for term summaries. © 2025")
