@@ -9,7 +9,6 @@ import re
 
 client = OpenAI()
 
-# --- APP NAME & PAGE CONFIG ---
 st.set_page_config(page_title="Bubble Mindmap Explorer", layout="wide")
 st.title("🧠 Bubble Mindmap Explorer")
 
@@ -69,32 +68,59 @@ def prompt_hierarchical_map(full_text):
         f"{full_text}"
     )
 
-def prompt_stakeholder_map(full_text):
-    return (
-        "Extract all stakeholder groups mentioned or implied in the document—such as organizations, agencies, interest groups, professions, communities, or segments of the public. For each stakeholder:\n"
-        '- "id": Group or organization name (as it appears)\n'
-        '- "role": One sentence on their role, interest, or position in the context of the document\n\n'
-        "Then, for each direct relationship or interaction (e.g., collaboration, influence, conflict, regulation, support, opposition, dependency, or affected-by), list an edge:\n"
-        '- "source": Stakeholder 1\n'
-        '- "target": Stakeholder 2\n'
-        '- "relationship": Short label (e.g., \"regulates\", \"supports\", \"opposes\", \"influences\", \"benefits from\")\n\n'
-        "Return valid JSON:\n"
-        "{\n"
-        '  "nodes": [\n'
-        '    {"id": "Ministry of Health", "role": "Sets policy and regulates healthcare providers."},\n'
-        '    {"id": "Hospitals", "role": "Provide health services to patients."},\n'
-        '    {"id": "Patients", "role": "Receive care and are directly affected by policy."}\n'
-        '  ],\n'
-        '  "edges": [\n'
-        '    {"source": "Ministry of Health", "target": "Hospitals", "relationship": "regulates"},\n'
-        '    {"source": "Hospitals", "target": "Patients", "relationship": "serves"}\n'
-        '  ]\n'
-        '}\n\n'
-        "Do not add explanations or commentary. Only output the JSON.\n\n"
+# --- TWO-STEP STAKEHOLDER EXTRACTION ---
+def extract_stakeholder_groups(full_text, max_groups=8):
+    prompt = (
+        f"List up to {max_groups} distinct stakeholder groups (organizations, agencies, interest groups, communities, sectors, or generic roles) mentioned or implied in the following document. "
+        "If fewer than 3 are found, include generic groups such as 'Government', 'Industry', 'Consumers', 'Public', 'Researchers', etc. "
+        "For each, provide a JSON object: {\"id\": <group name>, \"role\": <short description of their interest or function>}.\n"
+        "Return a JSON array with no commentary or extra text.\n\n"
         "Document:\n"
         "---\n"
         f"{full_text}"
     )
+    response = client.responses.create(model="gpt-4.1", input=prompt)
+    raw = response.output_text
+    start = raw.find('[')
+    end = raw.rfind(']')
+    if start != -1 and end != -1:
+        group_json = raw[start:end+1]
+        try:
+            return json.loads(group_json)
+        except Exception as e:
+            st.warning(f"Failed to parse stakeholder groups JSON: {e}")
+    return []
+
+def extract_stakeholder_relationships(full_text, group_names):
+    group_list = ', '.join([f'"{name}"' for name in group_names])
+    prompt = (
+        "Given these stakeholder groups: " + group_list + "\n"
+        "Identify all direct relationships or interactions among them, based only on the content of the document. "
+        "For each, provide a JSON object: {\"source\": <group>, \"target\": <group>, \"relationship\": <short label>}.\n"
+        "Do NOT make up links not present or implied in the document. If no direct relationships are described, return an empty array [].\n\n"
+        "Document:\n"
+        "---\n"
+        f"{full_text}"
+    )
+    response = client.responses.create(model="gpt-4.1", input=prompt)
+    raw = response.output_text
+    start = raw.find('[')
+    end = raw.rfind(']')
+    if start != -1 and end != -1:
+        rel_json = raw[start:end+1]
+        try:
+            return json.loads(rel_json)
+        except Exception as e:
+            st.warning(f"Failed to parse relationships JSON: {e}")
+    return []
+
+def get_stakeholder_map_two_step(full_text):
+    groups = extract_stakeholder_groups(full_text)
+    if not groups or len(groups) < 2:
+        return {"nodes": groups, "edges": []}
+    group_names = [g["id"] for g in groups]
+    edges = extract_stakeholder_relationships(full_text, group_names)
+    return {"nodes": groups, "edges": edges}
 
 # --- LLM CALLS ---
 def get_concept_map(full_text, max_terms=MAX_TERMS):
@@ -120,20 +146,6 @@ def get_hierarchical_mindmap(full_text):
         except Exception:
             pass
     return {}
-
-def get_stakeholder_map(full_text):
-    prompt = prompt_stakeholder_map(full_text)
-    response = client.responses.create(model="gpt-4.1", input=prompt)
-    raw = response.output_text
-    match = re.search(r'({.*})', raw, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(1))
-        except Exception as e:
-            st.warning(f"Failed to parse stakeholder map JSON: {e}")
-    else:
-        st.info("No valid stakeholder map JSON found.")
-    return {"nodes": [], "edges": []}
 
 def get_pdf_title_from_content(full_text, max_words=8, chunk_size=1000):
     chunk = ' '.join(full_text.split()[:chunk_size])
@@ -478,7 +490,7 @@ if uploaded_file:
         with st.spinner("Extracting document hierarchy..."):
             st.session_state.hierarchical = get_hierarchical_mindmap(st.session_state.full_text)
         with st.spinner("Extracting stakeholders..."):
-            st.session_state.stakeholder_map = get_stakeholder_map(st.session_state.full_text)
+            st.session_state.stakeholder_map = get_stakeholder_map_two_step(st.session_state.full_text)
 
 concept_map = st.session_state.get("concept_map")
 pdf_title = st.session_state.get("pdf_title", "Document")
@@ -508,6 +520,8 @@ if uploaded_file and concept_map:
             st.info("No hierarchical structure was extracted.")
     elif view_mode == "Stakeholder Map":
         if stakeholder_map and stakeholder_map.get("nodes"):
+            if len(stakeholder_map.get("nodes", [])) < 3:
+                st.warning("Too few stakeholders found for a meaningful map. Try a document with more explicit actors, or use another map type.")
             stakeholder_html = create_stakeholder_map_html(stakeholder_map)
             st.components.v1.html(stakeholder_html, height=900, width=1450, scrolling=False)
         else:
