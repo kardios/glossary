@@ -12,7 +12,6 @@ st.title("🧠 PDF Multi-level Bubble Mindmap Explorer")
 
 MAX_TERMS = 16
 
-# --- PDF TEXT EXTRACTION ---
 def extract_text_from_pdf(pdf_file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
         tmpfile.write(pdf_file.read())
@@ -21,7 +20,6 @@ def extract_text_from_pdf(pdf_file):
         full_text = "\n\n".join(page.get_text() for page in doc)
     return full_text
 
-# --- PROMPTS ---
 def prompt_glossary(full_text, max_terms=MAX_TERMS):
     return (
         f"Extract up to {max_terms} important glossary terms or concepts from the following document.\n"
@@ -111,7 +109,6 @@ def glossary_to_tree(glossary, root_title="Glossary"):
     }
 
 def flatten_tree_to_nodes_links(tree, parent_name=None, nodes=None, links=None):
-    """Recursively flatten tree into nodes and links for D3 force-directed graph."""
     if nodes is None: nodes = []
     if links is None: links = []
     this_id = tree.get("name")
@@ -124,9 +121,7 @@ def flatten_tree_to_nodes_links(tree, parent_name=None, nodes=None, links=None):
     return nodes, links
 
 def create_multilevel_mindmap_html(tree, center_title="Root"):
-    # Flatten the tree structure
     nodes, links = flatten_tree_to_nodes_links(tree)
-    # Group: 0 for root, 1 for others (could be enhanced)
     for n in nodes:
         n["group"] = 0 if n["id"] == center_title else 1
 
@@ -134,7 +129,6 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
     links_json = json.dumps(links)
     mindmap_html = f"""
     <div id="mindmap"></div>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
     #mindmap {{ width:100%; height:880px; min-height:700px; background:#f7faff; border-radius:18px; }}
     .tooltip-glossary {{
@@ -143,24 +137,33 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
         opacity: 0; transition: opacity 0.18s; max-width: 320px;
     }}
     </style>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
     <script>
     const nodes = {nodes_json};
     const links = {links_json};
     const width = 1400, height = 900;
     const rootID = "{center_title.replace('"', '\\"')}";
-    const svg = d3.select("#mindmap").append("svg")
-        .attr("width", width).attr("height", height);
-    const simulation = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(links).id(d => d.id).distance(d => d.source === rootID ? 270 : 180))
-        .force("charge", d3.forceManyBody().strength(-1400))
-        .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("collision", d3.forceCollide().radius(82));
 
-    const link = svg.append("g")
+    const svg = d3.select("#mindmap").append("svg")
+        .attr("width", width)
+        .attr("height", height)
+        .style("background", "#f7faff");
+
+    // --- GROUP for PAN & ZOOM ---
+    const container = svg.append("g");
+
+    // --- ZOOM BEHAVIOR ---
+    svg.call(
+        d3.zoom()
+          .scaleExtent([0.3, 2.5])
+          .on("zoom", (event) => container.attr("transform", event.transform))
+    );
+
+    const link = container.append("g")
         .selectAll("line").data(links).enter().append("line")
         .attr("stroke", "#b8cfff").attr("stroke-width", 2);
 
-    const node = svg.append("g")
+    const node = container.append("g")
         .selectAll("g")
         .data(nodes).enter().append("g")
         .attr("class", "node");
@@ -231,6 +234,12 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
         d.fy = null;
     }}
 
+    const simulation = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(links).id(d => d.id).distance(d => d.source === rootID ? 270 : 180))
+        .force("charge", d3.forceManyBody().strength(-1400))
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("collision", d3.forceCollide().radius(82));
+
     simulation.on("tick", () => {{
         link
             .attr("x1", d => d.source.x)
@@ -253,7 +262,6 @@ for key in ["file_hash", "full_text", "pdf_title", "glossary", "hierarchical", "
     if key not in st.session_state:
         st.session_state[key] = None
 
-# --- SIDEBAR: FILE UPLOAD & VIEW SELECT ---
 with st.sidebar:
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
     view_mode = st.radio(
@@ -270,7 +278,6 @@ def compute_file_hash(file_obj):
     file_obj.seek(0)
     return hashlib.md5(data).hexdigest()
 
-# --- PDF PROCESSING & LLM GENERATION ---
 if uploaded_file:
     file_hash = compute_file_hash(uploaded_file)
     if st.session_state.file_hash != file_hash:
@@ -284,7 +291,6 @@ if uploaded_file:
         with st.spinner("Extracting document hierarchy..."):
             st.session_state.hierarchical = get_hierarchical_mindmap(st.session_state.full_text)
 
-# --- MAIN AREA: VISUALIZATION ---
 glossary = st.session_state.get("glossary")
 pdf_title = st.session_state.get("pdf_title", "Document")
 hierarchical = st.session_state.get("hierarchical")
@@ -311,4 +317,4 @@ if uploaded_file and glossary:
         else:
             st.info("No hierarchical structure was extracted.")
 
-st.caption("Powered by OpenAI GPT-4.1. © 2025")
+st.caption("Powered by OpenAI GPT-4.1. Now with zoom/pan navigation. © 2025")
