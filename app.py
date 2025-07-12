@@ -50,7 +50,7 @@ def get_pdf_title_from_content(full_text, max_words=8, chunk_size=1000):
         return "Untitled Document"
 
 # --- GLOSSARY EXTRACTION (GPT-4.1 Responses API) ---
-def get_glossary_via_gpt41(full_text, max_terms=20):
+def get_glossary_via_gpt41(full_text, max_terms=16):
     input_prompt = (
         f"Extract up to {max_terms} key glossary terms from the following document.\n"
         "For each, provide a one-sentence definition or explanation as a tooltip.\n"
@@ -238,7 +238,7 @@ if uploaded_file:
         st.session_state.full_text = full_text
         st.session_state.pdf_title = get_pdf_title_from_content(full_text)
     with st.spinner("Extracting glossary using GPT-4.1..."):
-        glossary = get_glossary_via_gpt41(full_text, max_terms=20)
+        glossary = get_glossary_via_gpt41(full_text, max_terms=16)
         st.session_state.glossary = glossary
 
 glossary = st.session_state.get("glossary")
