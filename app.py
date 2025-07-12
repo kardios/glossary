@@ -13,6 +13,8 @@ client = OpenAI()  # Uses env var OPENAI_API_KEY
 st.set_page_config(page_title="PDF Glossary Mindmap", layout="wide")
 st.title("🧠 PDF Glossary Mindmap Explorer")
 
+st.write("Streamlit version:", st.__version__)
+
 # --- PDF UPLOAD ---
 with st.sidebar:
     st.header("Upload PDF")
