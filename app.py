@@ -194,7 +194,7 @@ def create_mindmap_html(glossary, root_title="Glossary"):
             lines.forEach((line, i) => {{
                 text.append("tspan")
                     .attr("x", 0)
-                    .attr("dy", i === 0 ? `${startDy}em` : "1.1em")
+                    .attr("dy", i === 0 ? `${{startDy}}em` : "1.1em")
                     .text(line);
             }});
         }});
