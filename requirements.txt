@@ -3,3 +3,4 @@ openai>=1.25.0
 pymupdf>=1.24.0
 pandas>=2.2.0
 streamlit-js-eval>=0.1.7
+streamlit-modal>=0.1.2
