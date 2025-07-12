@@ -43,7 +43,6 @@ def get_glossary_via_gpt41(full_text, max_terms=20):
         input=input_prompt,
     )
     glossary_json = response.output_text
-    # Extract just the JSON array (ignore extra text)
     start = glossary_json.find('[')
     end = glossary_json.rfind(']')
     if start != -1 and end != -1:
@@ -60,7 +59,7 @@ def get_summary_with_web_search(term, context_text=None):
         base_prompt += f"Use this as reference context (if helpful):\n{context_text}\n"
     response = client.responses.create(
         model="gpt-4.1",
-        tools=[{"type": "web_search_preview"}],  # Enables web search
+        tools=[{"type": "web_search_preview"}],
         input=base_prompt,
     )
     return response.output_text
@@ -70,7 +69,7 @@ def glossary_to_csv(glossary):
     df = pd.DataFrame(glossary)
     return df.to_csv(index=False)
 
-# --- D3 MINDMAP HTML ---
+# --- D3 MINDMAP HTML WITH DRAGGING ---
 def create_mindmap_html(glossary):
     nodes = [
         {"id": "Glossary", "group": 0}
@@ -146,6 +145,29 @@ def create_mindmap_html(glossary):
         .style("pointer-events", "none")
         .attr("text-anchor", "middle");
 
+    // DRAG BEHAVIOR
+    node.call(
+      d3.drag()
+        .on("start", dragstarted)
+        .on("drag", dragged)
+        .on("end", dragended)
+    );
+
+    function dragstarted(event, d) {{
+        if (!event.active) simulation.alphaTarget(0.3).restart();
+        d.fx = d.x;
+        d.fy = d.y;
+    }}
+    function dragged(event, d) {{
+        d.fx = event.x;
+        d.fy = event.y;
+    }}
+    function dragended(event, d) {{
+        if (!event.active) simulation.alphaTarget(0);
+        d.fx = null;
+        d.fy = null;
+    }}
+
     simulation.on("tick", () => {{
         link
             .attr("x1", d => d.source.x)
@@ -200,9 +222,9 @@ if glossary:
         mime="text/csv"
     )
 
-# --- MINIMAP ---
+# --- MINDMAP ---
 if glossary:
-    st.subheader("Glossary Mindmap")
+    st.subheader("Glossary Mindmap (Drag Bubbles!)")
     mindmap_html = create_mindmap_html(glossary)
     st.components.v1.html(mindmap_html, height=670, width=930, scrolling=False)
 
@@ -220,7 +242,6 @@ if glossary:
         """,
         key="mindmap_click",
     )
-    # Sidebar or bubble click both set st.session_state.clicked_term
     if clicked_term:
         st.session_state.clicked_term = clicked_term
 
