@@ -387,4 +387,130 @@ def create_stakeholder_map_html(stakeholder_data):
             if (current.trim()) lines.push(current.trim());
             const startDy = -((lines.length - 1) / 2) * 1.1;
             lines.forEach((line, i) => {{
-               
+                text.append("tspan")
+                    .attr("x", 0)
+                    .attr("dy", i === 0 ? `${{startDy}}em` : "1.1em")
+                    .text(line);
+            }});
+        }});
+
+    node.call(
+      d3.drag()
+        .on("start", dragstarted)
+        .on("drag", dragged)
+        .on("end", dragended)
+    );
+    function dragstarted(event, d) {{
+        if (!event.active) simulation.alphaTarget(0.3).restart();
+        d.fx = d.x;
+        d.fy = d.y;
+    }}
+    function dragged(event, d) {{
+        d.fx = event.x;
+        d.fy = event.y;
+    }}
+    function dragended(event, d) {{
+        if (!event.active) simulation.alphaTarget(0);
+        d.fx = null;
+        d.fy = null;
+    }}
+    const simulation = d3.forceSimulation(nodes)
+        .force("link", d3.forceLink(links).id(d => d.id).distance(240))
+        .force("charge", d3.forceManyBody().strength(-1100))
+        .force("center", d3.forceCenter(width / 2, height / 2))
+        .force("collision", d3.forceCollide().radius(80));
+    simulation.on("tick", () => {{
+        link
+            .attr("x1", d => d.source.x)
+            .attr("y1", d => d.source.y)
+            .attr("x2", d => d.target.x)
+            .attr("y2", d => d.target.y);
+
+        node
+            .attr("transform", d => `translate(${{d.x}},${{d.y}})`);
+    }});
+    link.on("mouseover", function(e, d) {{
+        tooltip.style("opacity", 1).html(
+            "<b>" + d.source + "</b> &rarr; <b>" + d.target + "</b><br>"
+            + "<i>" + d.relationship + "</i>"
+        )
+        .style("left", (e.pageX+12)+"px").style("top", (e.pageY-18)+"px");
+    }}).on("mouseout", function(e,d) {{
+        tooltip.style("opacity", 0);
+    }});
+    const tooltip = d3.select("body").append("div")
+        .attr("class", "tooltip-entity");
+    </script>
+    """
+    return html
+
+# --- SESSION STATE INIT ---
+for key in ["file_hash", "full_text", "pdf_title", "concept_map", "hierarchical", "stakeholder_map", "view_mode"]:
+    if key not in st.session_state:
+        st.session_state[key] = None
+
+with st.sidebar:
+    uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
+    view_mode = st.radio(
+        "Show as:",
+        ["Concept Map", "Hierarchical Map", "Stakeholder Map"],
+        index=0,
+        key="view_mode"
+    )
+    st.write("---")
+
+def compute_file_hash(file_obj):
+    file_obj.seek(0)
+    data = file_obj.read()
+    file_obj.seek(0)
+    return hashlib.md5(data).hexdigest()
+
+if uploaded_file:
+    file_hash = compute_file_hash(uploaded_file)
+    if st.session_state.file_hash != file_hash:
+        st.session_state.file_hash = file_hash
+        with st.spinner("Extracting text from PDF..."):
+            full_text = extract_text_from_pdf(uploaded_file)
+            st.session_state.full_text = full_text
+            st.session_state.pdf_title = get_pdf_title_from_content(full_text)
+        with st.spinner("Extracting concepts..."):
+            st.session_state.concept_map = get_concept_map(st.session_state.full_text, MAX_TERMS)
+        with st.spinner("Extracting document hierarchy..."):
+            st.session_state.hierarchical = get_hierarchical_mindmap(st.session_state.full_text)
+        with st.spinner("Extracting stakeholders..."):
+            st.session_state.stakeholder_map = get_stakeholder_map(st.session_state.full_text)
+
+concept_map = st.session_state.get("concept_map")
+pdf_title = st.session_state.get("pdf_title", "Document")
+hierarchical = st.session_state.get("hierarchical")
+stakeholder_map = st.session_state.get("stakeholder_map")
+view_mode = st.session_state.get("view_mode", "Concept Map")
+
+if uploaded_file and concept_map:
+    st.subheader(f"{view_mode} (Root: {pdf_title})")
+    if view_mode == "Concept Map":
+        csv_data = pd.DataFrame(concept_map).to_csv(index=False)
+        with st.sidebar:
+            st.download_button(
+                label="Download Glossary as CSV",
+                data=csv_data,
+                file_name="glossary.csv",
+                mime="text/csv"
+            )
+        concept_tree = concept_map_to_tree(concept_map, root_title=pdf_title)
+        mindmap_html = create_multilevel_mindmap_html(concept_tree, center_title=pdf_title)
+        st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
+    elif view_mode == "Hierarchical Map":
+        if hierarchical and hierarchical.get("children"):
+            mindmap_html = create_multilevel_mindmap_html(hierarchical, center_title=hierarchical.get("name", "Root"))
+            st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
+        else:
+            st.info("No hierarchical structure was extracted.")
+    elif view_mode == "Stakeholder Map":
+        if stakeholder_map and stakeholder_map.get("nodes"):
+            stakeholder_html = create_stakeholder_map_html(stakeholder_map)
+            st.components.v1.html(stakeholder_html, height=900, width=1450, scrolling=False)
+        else:
+            st.info("No stakeholders found in this document.")
+
+st.caption("Powered by OpenAI GPT-4.1. Three ways to explore any PDF. © 2025")
