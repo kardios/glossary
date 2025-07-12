@@ -112,10 +112,10 @@ def get_pdf_title_from_content(full_text, max_words=8, chunk_size=1000):
     except Exception:
         return "Untitled Document"
 
-def concept_map_to_tree(glossary, root_title="Glossary"):
+def concept_map_to_tree(glossary, root_title="Concept Map"):
     return {
         "name": root_title,
-        "tooltip": "Glossary of key terms.",
+        "tooltip": "Key concepts from the document.",
         "children": [
             {"name": item["term"], "tooltip": item["tooltip"]} for item in glossary
         ]
