@@ -5,7 +5,6 @@ import json
 import tempfile
 from openai import OpenAI
 import hashlib
-import re
 
 client = OpenAI()
 
@@ -23,7 +22,7 @@ def extract_text_from_pdf(pdf_file):
         full_text = "\n\n".join(page.get_text() for page in doc)
     return full_text
 
-# --- PROMPTS ---
+# --- LLM PROMPTS ---
 def prompt_concept_map(full_text, max_terms=MAX_TERMS):
     return (
         f"Extract up to {max_terms} of the most important concepts, technical terms, or keywords from the following document, prioritizing those that are central to its arguments, themes, or subject matter. "
@@ -39,7 +38,7 @@ def prompt_concept_map(full_text, max_terms=MAX_TERMS):
         f"{full_text}"
     )
 
-def prompt_hierarchical_map(full_text):
+def prompt_structure_map(full_text):
     return (
         "Summarize the structure of this document as a hierarchical mindmap. Your mindmap should have:\n"
         "- 3 to 6 major topics at the first level (root children).\n"
@@ -68,60 +67,6 @@ def prompt_hierarchical_map(full_text):
         f"{full_text}"
     )
 
-# --- TWO-STEP STAKEHOLDER EXTRACTION ---
-def extract_stakeholder_groups(full_text, max_groups=8):
-    prompt = (
-        f"List up to {max_groups} distinct stakeholder groups (organizations, agencies, interest groups, communities, sectors, or generic roles) mentioned or implied in the following document. "
-        "If fewer than 3 are found, include generic groups such as 'Government', 'Industry', 'Consumers', 'Public', 'Researchers', etc. "
-        "For each, provide a JSON object: {\"id\": <group name>, \"role\": <short description of their interest or function>}.\n"
-        "Return a JSON array with no commentary or extra text.\n\n"
-        "Document:\n"
-        "---\n"
-        f"{full_text}"
-    )
-    response = client.responses.create(model="gpt-4.1", input=prompt)
-    raw = response.output_text
-    start = raw.find('[')
-    end = raw.rfind(']')
-    if start != -1 and end != -1:
-        group_json = raw[start:end+1]
-        try:
-            return json.loads(group_json)
-        except Exception as e:
-            st.warning(f"Failed to parse stakeholder groups JSON: {e}")
-    return []
-
-def extract_stakeholder_relationships(full_text, group_names):
-    group_list = ', '.join([f'"{name}"' for name in group_names])
-    prompt = (
-        "Given these stakeholder groups: " + group_list + "\n"
-        "Identify all direct relationships or interactions among them, based only on the content of the document. "
-        "For each, provide a JSON object: {\"source\": <group>, \"target\": <group>, \"relationship\": <short label>}.\n"
-        "Do NOT make up links not present or implied in the document. If no direct relationships are described, return an empty array [].\n\n"
-        "Document:\n"
-        "---\n"
-        f"{full_text}"
-    )
-    response = client.responses.create(model="gpt-4.1", input=prompt)
-    raw = response.output_text
-    start = raw.find('[')
-    end = raw.rfind(']')
-    if start != -1 and end != -1:
-        rel_json = raw[start:end+1]
-        try:
-            return json.loads(rel_json)
-        except Exception as e:
-            st.warning(f"Failed to parse relationships JSON: {e}")
-    return []
-
-def get_stakeholder_map_two_step(full_text):
-    groups = extract_stakeholder_groups(full_text)
-    if not groups or len(groups) < 2:
-        return {"nodes": groups, "edges": []}
-    group_names = [g["id"] for g in groups]
-    edges = extract_stakeholder_relationships(full_text, group_names)
-    return {"nodes": groups, "edges": edges}
-
 # --- LLM CALLS ---
 def get_concept_map(full_text, max_terms=MAX_TERMS):
     input_prompt = prompt_concept_map(full_text, max_terms)
@@ -134,8 +79,8 @@ def get_concept_map(full_text, max_terms=MAX_TERMS):
     glossary = json.loads(glossary_json)
     return glossary[:max_terms]
 
-def get_hierarchical_mindmap(full_text):
-    prompt = prompt_hierarchical_map(full_text)
+def get_structure_map(full_text):
+    prompt = prompt_structure_map(full_text)
     response = client.responses.create(model="gpt-4.1", input=prompt)
     raw = response.output_text
     first = raw.find('{')
@@ -325,139 +270,23 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
     """
     return mindmap_html
 
-def create_stakeholder_map_html(stakeholder_data):
-    nodes = stakeholder_data.get("nodes", [])
-    edges = stakeholder_data.get("edges", [])
-    color = "#A7C7E7"
-    nodes_json = json.dumps([
-        {**node, "color": color}
-        for node in nodes
-    ])
-    edges_json = json.dumps(edges)
-    html = f"""
-    <div id="stakeholdermap"></div>
-    <style>
-    #stakeholdermap {{ width:100%; height:880px; background:#f7faff; border-radius:18px; }}
-    .tooltip-entity {{
-        position: absolute; pointer-events: none; background: #fff; border: 1.5px solid #666; border-radius: 8px;
-        padding: 10px 13px; font-size: 1em; color: #2c4274; box-shadow: 0 2px 12px rgba(60,100,180,0.15); z-index: 10;
-        opacity: 0; transition: opacity 0.18s; max-width: 350px;
-    }}
-    </style>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    <script>
-    const nodes = {nodes_json};
-    const links = {edges_json};
-    const width = 1400, height = 900;
-    const svg = d3.select("#stakeholdermap").append("svg")
-        .attr("width", width).attr("height", height)
-        .style("background", "#f7faff");
-    const container = svg.append("g");
-    svg.call(
-        d3.zoom().scaleExtent([0.3, 2.5]).on("zoom", (event) => container.attr("transform", event.transform))
-    );
-    const link = container.append("g")
-        .selectAll("line").data(links).enter().append("line")
-        .attr("stroke", "#b8cfff").attr("stroke-width", 2);
+# --- EXPORT FORMATTING ---
+def concept_map_txt(glossary):
+    txt = ""
+    for item in glossary:
+        txt += f"Term: {item['term']}\nDefinition: {item['tooltip']}\n\n"
+    return txt
 
-    const node = container.append("g")
-        .selectAll("g")
-        .data(nodes).enter().append("g")
-        .attr("class", "node");
-    node.append("circle")
-        .attr("r", 65)
-        .attr("fill", d => d.color)
-        .attr("stroke", "#528fff").attr("stroke-width", 3)
-        .on("mouseover", function(e, d) {{
-            tooltip.style("opacity", 1).html("<b>" + d.id + "</b><br>(" + d.role + ")")
-              .style("left", (e.pageX+12)+"px").style("top", (e.pageY-18)+"px");
-        }})
-        .on("mousemove", function(e) {{
-            tooltip.style("left", (e.pageX+12)+"px").style("top", (e.pageY-18)+"px");
-        }})
-        .on("mouseout", function(e, d) {{
-            tooltip.style("opacity", 0);
-        }});
-
-    node.append("text")
-        .attr("text-anchor", "middle")
-        .style("font-size", "1.05em")
-        .each(function(d) {{
-            const text = d3.select(this);
-            const maxChars = 15;
-            const words = d.id.split(' ');
-            let lines = [];
-            let current = '';
-            words.forEach(word => {{
-                if ((current + ' ' + word).trim().length > maxChars) {{
-                    lines.push(current.trim());
-                    current = word;
-                }} else {{
-                    current += ' ' + word;
-                }}
-            }});
-            if (current.trim()) lines.push(current.trim());
-            const startDy = -((lines.length - 1) / 2) * 1.1;
-            lines.forEach((line, i) => {{
-                text.append("tspan")
-                    .attr("x", 0)
-                    .attr("dy", i === 0 ? `${{startDy}}em` : "1.1em")
-                    .text(line);
-            }});
-        }});
-
-    node.call(
-      d3.drag()
-        .on("start", dragstarted)
-        .on("drag", dragged)
-        .on("end", dragended)
-    );
-    function dragstarted(event, d) {{
-        if (!event.active) simulation.alphaTarget(0.3).restart();
-        d.fx = d.x;
-        d.fy = d.y;
-    }}
-    function dragged(event, d) {{
-        d.fx = event.x;
-        d.fy = event.y;
-    }}
-    function dragended(event, d) {{
-        if (!event.active) simulation.alphaTarget(0);
-        d.fx = null;
-        d.fy = null;
-    }}
-    const simulation = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(links).id(d => d.id).distance(240))
-        .force("charge", d3.forceManyBody().strength(-1100))
-        .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("collision", d3.forceCollide().radius(80));
-    simulation.on("tick", () => {{
-        link
-            .attr("x1", d => d.source.x)
-            .attr("y1", d => d.source.y)
-            .attr("x2", d => d.target.x)
-            .attr("y2", d => d.target.y);
-
-        node
-            .attr("transform", d => `translate(${{d.x}},${{d.y}})`);
-    }});
-    link.on("mouseover", function(e, d) {{
-        tooltip.style("opacity", 1).html(
-            "<b>" + d.source + "</b> &rarr; <b>" + d.target + "</b><br>"
-            + "<i>" + d.relationship + "</i>"
-        )
-        .style("left", (e.pageX+12)+"px").style("top", (e.pageY-18)+"px");
-    }}).on("mouseout", function(e,d) {{
-        tooltip.style("opacity", 0);
-    }});
-    const tooltip = d3.select("body").append("div")
-        .attr("class", "tooltip-entity");
-    </script>
-    """
-    return html
+def structure_map_txt(tree, level=0):
+    txt = ""
+    indent = "  " * level
+    txt += f"{indent}- {tree.get('name', '')}: {tree.get('tooltip', '')}\n"
+    for child in tree.get("children", []):
+        txt += structure_map_txt(child, level+1)
+    return txt
 
 # --- SESSION STATE INIT ---
-for key in ["file_hash", "full_text", "pdf_title", "concept_map", "hierarchical", "stakeholder_map", "view_mode"]:
+for key in ["file_hash", "full_text", "pdf_title", "concept_map", "structure_map", "view_mode"]:
     if key not in st.session_state:
         st.session_state[key] = None
 
@@ -465,7 +294,7 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
     view_mode = st.radio(
         "Show as:",
-        ["Concept Map", "Hierarchical Map", "Stakeholder Map"],
+        ["Concept Map", "Structure Map"],
         index=0,
         key="view_mode"
     )
@@ -485,46 +314,42 @@ if uploaded_file:
             full_text = extract_text_from_pdf(uploaded_file)
             st.session_state.full_text = full_text
             st.session_state.pdf_title = get_pdf_title_from_content(full_text)
-        with st.spinner("Extracting concepts..."):
+        with st.spinner("Extracting concept map..."):
             st.session_state.concept_map = get_concept_map(st.session_state.full_text, MAX_TERMS)
-        with st.spinner("Extracting document hierarchy..."):
-            st.session_state.hierarchical = get_hierarchical_mindmap(st.session_state.full_text)
-        with st.spinner("Extracting stakeholders..."):
-            st.session_state.stakeholder_map = get_stakeholder_map_two_step(st.session_state.full_text)
+        with st.spinner("Extracting structure map..."):
+            st.session_state.structure_map = get_structure_map(st.session_state.full_text)
 
 concept_map = st.session_state.get("concept_map")
+structure_map = st.session_state.get("structure_map")
 pdf_title = st.session_state.get("pdf_title", "Document")
-hierarchical = st.session_state.get("hierarchical")
-stakeholder_map = st.session_state.get("stakeholder_map")
 view_mode = st.session_state.get("view_mode", "Concept Map")
 
-if uploaded_file and concept_map:
-    st.subheader(f"{view_mode} (Root: {pdf_title})")
+# --- MAIN DISPLAY ---
+if uploaded_file and concept_map and structure_map:
     if view_mode == "Concept Map":
-        csv_data = pd.DataFrame(concept_map).to_csv(index=False)
-        with st.sidebar:
-            st.download_button(
-                label="Download Glossary as CSV",
-                data=csv_data,
-                file_name="glossary.csv",
-                mime="text/csv"
-            )
         concept_tree = concept_map_to_tree(concept_map, root_title=pdf_title)
         mindmap_html = create_multilevel_mindmap_html(concept_tree, center_title=pdf_title)
         st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
-    elif view_mode == "Hierarchical Map":
-        if hierarchical and hierarchical.get("children"):
-            mindmap_html = create_multilevel_mindmap_html(hierarchical, center_title=hierarchical.get("name", "Root"))
+        # Download glossary as TXT
+        txt_data = concept_map_txt(concept_map)
+        st.sidebar.download_button(
+            label="Download Glossary as TXT",
+            data=txt_data,
+            file_name="glossary.txt",
+            mime="text/plain"
+        )
+    elif view_mode == "Structure Map":
+        if structure_map and structure_map.get("children"):
+            mindmap_html = create_multilevel_mindmap_html(structure_map, center_title=structure_map.get("name", "Root"))
             st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
+            txt_data = structure_map_txt(structure_map)
+            st.sidebar.download_button(
+                label="Download Structure Outline as TXT",
+                data=txt_data,
+                file_name="structure_map.txt",
+                mime="text/plain"
+            )
         else:
-            st.info("No hierarchical structure was extracted.")
-    elif view_mode == "Stakeholder Map":
-        if stakeholder_map and stakeholder_map.get("nodes"):
-            if len(stakeholder_map.get("nodes", [])) < 3:
-                st.warning("Too few stakeholders found for a meaningful map. Try a document with more explicit actors, or use another map type.")
-            stakeholder_html = create_stakeholder_map_html(stakeholder_map)
-            st.components.v1.html(stakeholder_html, height=900, width=1450, scrolling=False)
-        else:
-            st.info("No stakeholders found in this document.")
+            st.info("No structure was extracted.")
 
-st.caption("Powered by OpenAI GPT-4.1. Three ways to explore any PDF. © 2025")
+st.caption("Powered by OpenAI GPT-4.1. Explore any PDF as a mindmap. © 2025")
