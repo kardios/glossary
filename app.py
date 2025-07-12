@@ -1,6 +1,5 @@
 import streamlit as st
 import fitz  # PyMuPDF
-import pandas as pd
 import json
 import tempfile
 from openai import OpenAI
@@ -67,6 +66,44 @@ def prompt_structure_map(full_text):
         f"{full_text}"
     )
 
+def prompt_argument_map(full_text):
+    return (
+        "Extract the main argument structure from the following document and represent it as a hierarchical mindmap. Your output should have:\n"
+        "- A root node stating the main thesis or central claim of the document.\n"
+        "- For each main argument or reason supporting the thesis, create a first-level child node with a concise summary.\n"
+        "- For each main argument, include its key supporting evidence, examples, or sub-reasons as further children (second or third level as needed).\n"
+        "- If there are notable counterarguments or objections addressed in the document, add them as sibling branches with a \"Counterargument\" or \"Objection\" label.\n\n"
+        "Each node must have:\n"
+        "- \"name\": the claim, argument, evidence, or objection (short phrase)\n"
+        "- \"tooltip\": a brief summary, example, or citation (1–2 sentences)\n\n"
+        "Return valid JSON only, in this format:\n"
+        "{\n"
+        '  "name": "Thesis: ...",\n'
+        '  "tooltip": "...",\n'
+        '  "children": [\n'
+        '    {\n'
+        '      "name": "Main Argument 1",\n'
+        '      "tooltip": "...",\n'
+        '      "children": [\n'
+        '        { "name": "Evidence", "tooltip": "..." },\n'
+        '        { "name": "Example", "tooltip": "..." }\n'
+        '      ]\n'
+        '    },\n'
+        '    {\n'
+        '      "name": "Counterargument: ...",\n'
+        '      "tooltip": "...",\n'
+        '      "children": [\n'
+        '        { "name": "Rebuttal", "tooltip": "..." }\n'
+        '      ]\n'
+        '    }\n'
+        '  ]\n'
+        '}\n'
+        "Only output valid JSON, no commentary.\n\n"
+        "Document:\n"
+        "---\n"
+        f"{full_text}"
+    )
+
 # --- LLM CALLS ---
 def get_concept_map(full_text, max_terms=MAX_TERMS):
     input_prompt = prompt_concept_map(full_text, max_terms)
@@ -81,6 +118,19 @@ def get_concept_map(full_text, max_terms=MAX_TERMS):
 
 def get_structure_map(full_text):
     prompt = prompt_structure_map(full_text)
+    response = client.responses.create(model="gpt-4.1", input=prompt)
+    raw = response.output_text
+    first = raw.find('{')
+    last = raw.rfind('}')
+    if first != -1 and last != -1:
+        try:
+            return json.loads(raw[first:last+1])
+        except Exception:
+            pass
+    return {}
+
+def get_argument_map(full_text):
+    prompt = prompt_argument_map(full_text)
     response = client.responses.create(model="gpt-4.1", input=prompt)
     raw = response.output_text
     first = raw.find('{')
@@ -277,16 +327,16 @@ def concept_map_txt(glossary):
         txt += f"Term: {item['term']}\nDefinition: {item['tooltip']}\n\n"
     return txt
 
-def structure_map_txt(tree, level=0):
+def tree_map_txt(tree, level=0):
     txt = ""
     indent = "  " * level
     txt += f"{indent}- {tree.get('name', '')}: {tree.get('tooltip', '')}\n"
     for child in tree.get("children", []):
-        txt += structure_map_txt(child, level+1)
+        txt += tree_map_txt(child, level+1)
     return txt
 
 # --- SESSION STATE INIT ---
-for key in ["file_hash", "full_text", "pdf_title", "concept_map", "structure_map", "view_mode"]:
+for key in ["file_hash", "full_text", "pdf_title", "concept_map", "structure_map", "argument_map", "view_mode"]:
     if key not in st.session_state:
         st.session_state[key] = None
 
@@ -294,7 +344,7 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
     view_mode = st.radio(
         "Show as:",
-        ["Concept Map", "Structure Map"],
+        ["Concept Map", "Structure Map", "Argument Map"],
         index=0,
         key="view_mode"
     )
@@ -318,19 +368,21 @@ if uploaded_file:
             st.session_state.concept_map = get_concept_map(st.session_state.full_text, MAX_TERMS)
         with st.spinner("Extracting structure map..."):
             st.session_state.structure_map = get_structure_map(st.session_state.full_text)
+        with st.spinner("Extracting argument map..."):
+            st.session_state.argument_map = get_argument_map(st.session_state.full_text)
 
 concept_map = st.session_state.get("concept_map")
 structure_map = st.session_state.get("structure_map")
+argument_map = st.session_state.get("argument_map")
 pdf_title = st.session_state.get("pdf_title", "Document")
 view_mode = st.session_state.get("view_mode", "Concept Map")
 
 # --- MAIN DISPLAY ---
-if uploaded_file and concept_map and structure_map:
+if uploaded_file and concept_map and structure_map and argument_map:
     if view_mode == "Concept Map":
         concept_tree = concept_map_to_tree(concept_map, root_title=pdf_title)
         mindmap_html = create_multilevel_mindmap_html(concept_tree, center_title=pdf_title)
         st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
-        # Download concept map as TXT
         txt_data = concept_map_txt(concept_map)
         st.sidebar.download_button(
             label="Download Concept Map as TXT",
@@ -342,8 +394,7 @@ if uploaded_file and concept_map and structure_map:
         if structure_map and structure_map.get("children"):
             mindmap_html = create_multilevel_mindmap_html(structure_map, center_title=structure_map.get("name", "Root"))
             st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
-            # Download structure map as TXT
-            txt_data = structure_map_txt(structure_map)
+            txt_data = tree_map_txt(structure_map)
             st.sidebar.download_button(
                 label="Download Structure Map as TXT",
                 data=txt_data,
@@ -352,5 +403,18 @@ if uploaded_file and concept_map and structure_map:
             )
         else:
             st.info("No structure was extracted.")
+    elif view_mode == "Argument Map":
+        if argument_map and argument_map.get("children"):
+            mindmap_html = create_multilevel_mindmap_html(argument_map, center_title=argument_map.get("name", "Root"))
+            st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
+            txt_data = tree_map_txt(argument_map)
+            st.sidebar.download_button(
+                label="Download Argument Map as TXT",
+                data=txt_data,
+                file_name="argument_map.txt",
+                mime="text/plain"
+            )
+        else:
+            st.info("No argument structure was extracted.")
 
 st.caption("Powered by OpenAI GPT-4.1. Explore any PDF as a mindmap. © 2025")
