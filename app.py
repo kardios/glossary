@@ -28,6 +28,37 @@ def extract_text_from_pdf(pdf_file):
         full_text = "\n\n".join(page.get_text() for page in doc)
     return full_text
 
+# --- PDF TITLE OR GIST EXTRACTION ---
+def get_pdf_title(pdf_file, full_text):
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
+            tmpfile.write(pdf_file.read())
+            tmpfile.flush()
+            doc = fitz.open(tmpfile.name)
+            title = doc.metadata.get("title")
+            if title and title.strip() and title.lower() != "untitled":
+                return title.strip()
+            # Fallback: first non-blank line of first page
+            first_page_text = doc[0].get_text().strip()
+            for line in first_page_text.splitlines():
+                if line.strip():
+                    return line.strip()
+    except Exception:
+        pass
+    # Last resort: use GPT-4.1 to suggest a title
+    try:
+        prompt = (
+            "Provide a concise, informative title (max 10 words) for the following document:\n"
+            + full_text[:2000]  # Only the first 2000 chars for context
+        )
+        response = client.responses.create(
+            model="gpt-4.1",
+            input=prompt,
+        )
+        return response.output_text.strip().split("\n")[0]
+    except Exception:
+        return "Document"
+
 # --- GLOSSARY EXTRACTION (GPT-4.1 Responses API) ---
 def get_glossary_via_gpt41(full_text, max_terms=20):
     input_prompt = (
@@ -69,16 +100,16 @@ def glossary_to_csv(glossary):
     df = pd.DataFrame(glossary)
     return df.to_csv(index=False)
 
-# --- D3 MINDMAP HTML WITH DRAGGING ---
-def create_mindmap_html(glossary):
+# --- D3 MINDMAP HTML WITH DRAGGING, CUSTOM ROOT ---
+def create_mindmap_html(glossary, root_title="Glossary"):
     nodes = [
-        {"id": "Glossary", "group": 0}
+        {"id": root_title, "group": 0}
     ] + [
         {"id": item["term"], "group": 1, "tooltip": item["tooltip"]}
         for item in glossary
     ]
     links = [
-        {"source": "Glossary", "target": item["term"]}
+        {"source": root_title, "target": item["term"]}
         for item in glossary
     ]
     mindmap_html = f"""
@@ -192,6 +223,8 @@ if "glossary" not in st.session_state:
     st.session_state.glossary = None
 if "full_text" not in st.session_state:
     st.session_state.full_text = ""
+if "pdf_title" not in st.session_state:
+    st.session_state.pdf_title = None
 if "clicked_term" not in st.session_state:
     st.session_state.clicked_term = None
 
@@ -200,20 +233,17 @@ if uploaded_file:
     with st.spinner("Extracting text from PDF..."):
         full_text = extract_text_from_pdf(uploaded_file)
         st.session_state.full_text = full_text
+        st.session_state.pdf_title = get_pdf_title(uploaded_file, full_text)
     with st.spinner("Extracting glossary using GPT-4.1..."):
         glossary = get_glossary_via_gpt41(full_text, max_terms=20)
         st.session_state.glossary = glossary
 
 glossary = st.session_state.get("glossary")
 full_text = st.session_state.get("full_text", "")
+pdf_title = st.session_state.get("pdf_title", "Document")
 
-# --- SIDEBAR GLOSSARY + DOWNLOAD ---
+# --- SIDEBAR: CSV DOWNLOAD ONLY ---
 if glossary:
-    st.sidebar.header("Glossary Terms")
-    for idx, item in enumerate(glossary):
-        if st.sidebar.button(item['term'], key=f"sidebar_{idx}"):
-            st.session_state.clicked_term = item['term']
-    st.sidebar.write("---")
     csv_data = glossary_to_csv(glossary)
     st.sidebar.download_button(
         label="Download Glossary as CSV",
@@ -224,8 +254,8 @@ if glossary:
 
 # --- MINDMAP ---
 if glossary:
-    st.subheader("Glossary Mindmap (Drag Bubbles!)")
-    mindmap_html = create_mindmap_html(glossary)
+    st.subheader(f"Glossary Mindmap (Root: {pdf_title})")
+    mindmap_html = create_mindmap_html(glossary, root_title=pdf_title)
     st.components.v1.html(mindmap_html, height=670, width=930, scrolling=False)
 
     # Listen for JS bubble click events
