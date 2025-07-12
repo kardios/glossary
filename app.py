@@ -68,37 +68,12 @@ def prompt_structure_map(full_text):
 
 def prompt_argument_map(full_text):
     return (
-        "Extract the main argument structure from the following document and represent it as a hierarchical mindmap. Your output should have:\n"
-        "- A root node stating the main thesis or central claim of the document.\n"
-        "- For each main argument or reason supporting the thesis, create a first-level child node with a concise summary.\n"
-        "- For each main argument, include its key supporting evidence, examples, or sub-reasons as further children (second or third level as needed).\n"
-        "- If there are notable counterarguments or objections addressed in the document, add them as sibling branches with a \"Counterargument\" or \"Objection\" label.\n\n"
-        "Each node must have:\n"
-        "- \"name\": the claim, argument, evidence, or objection (short phrase)\n"
-        "- \"tooltip\": a brief summary, example, or citation (1–2 sentences)\n\n"
-        "Return valid JSON only, in this format:\n"
-        "{\n"
-        '  "name": "Thesis: ...",\n'
-        '  "tooltip": "...",\n'
-        '  "children": [\n'
-        '    {\n'
-        '      "name": "Main Argument 1",\n'
-        '      "tooltip": "...",\n'
-        '      "children": [\n'
-        '        { "name": "Evidence", "tooltip": "..." },\n'
-        '        { "name": "Example", "tooltip": "..." }\n'
-        '      ]\n'
-        '    },\n'
-        '    {\n'
-        '      "name": "Counterargument: ...",\n'
-        '      "tooltip": "...",\n'
-        '      "children": [\n'
-        '        { "name": "Rebuttal", "tooltip": "..." }\n'
-        '      ]\n'
-        '    }\n'
-        '  ]\n'
-        '}\n'
-        "Only output valid JSON, no commentary.\n\n"
+        "Extract the main argument structure from the following document as a hierarchical mindmap. For each node, include:\n"
+        '- "name": A very short label (max 4–5 words).\n'
+        '- "type": One of: "Thesis", "Supporting Argument", "Evidence", "Counterargument".\n'
+        '- "tooltip": A brief summary or example (1–2 sentences).\n\n'
+        'Use "Thesis" for the root claim, "Supporting Argument" for reasons/sub-reasons, "Evidence" for supporting facts/examples, and "Counterargument" for objections or opposing points.\n\n'
+        "Return valid JSON only, preserving the hierarchy.\n\n"
         "Document:\n"
         "---\n"
         f"{full_text}"
@@ -176,14 +151,15 @@ def flatten_tree_to_nodes_links(tree, parent_name=None, nodes=None, links=None):
     if links is None: links = []
     this_id = tree.get("name")
     tooltip = tree.get("tooltip", "")
-    nodes.append({"id": this_id, "tooltip": tooltip})
+    node_type = tree.get("type", "")  # May not exist in Concept/Structure map
+    nodes.append({"id": this_id, "tooltip": tooltip, "type": node_type})
     if parent_name:
         links.append({"source": parent_name, "target": this_id})
     for child in tree.get("children", []):
         flatten_tree_to_nodes_links(child, this_id, nodes, links)
     return nodes, links
 
-def create_multilevel_mindmap_html(tree, center_title="Root"):
+def create_multilevel_mindmap_html(tree, center_title="Root", mode="concept"):
     nodes, links = flatten_tree_to_nodes_links(tree)
     for n in nodes:
         n["group"] = 0 if n["id"] == center_title else 1
@@ -199,13 +175,50 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
         padding: 10px 13px; font-size: 1em; color: #2c4274; box-shadow: 0 2px 12px rgba(60,100,180,0.15); z-index: 10;
         opacity: 0; transition: opacity 0.18s; max-width: 320px;
     }}
+    .legend-container {{
+        margin-bottom: 10px;
+        margin-top: 5px;
+    }}
+    .legend-item {{
+        display: inline-block;
+        margin-right: 18px;
+        font-size: 1em;
+        vertical-align: middle;
+    }}
+    .legend-circle {{
+        display: inline-block;
+        width: 17px; height: 17px;
+        border-radius: 50%;
+        margin-right: 7px;
+        vertical-align: middle;
+    }}
     </style>
     <script src="https://d3js.org/d3.v7.min.js"></script>
+    <div class="legend-container">
+      {"<span class='legend-item'><span class='legend-circle' style='background:#3B82F6;'></span>Thesis</span>" if mode=='argument' else ""}
+      {"<span class='legend-item'><span class='legend-circle' style='background:#22C55E;'></span>Supporting Argument</span>" if mode=='argument' else ""}
+      {"<span class='legend-item'><span class='legend-circle' style='background:#D1D5DB;'></span>Evidence</span>" if mode=='argument' else ""}
+      {"<span class='legend-item'><span class='legend-circle' style='background:#F87171;'></span>Counterargument</span>" if mode=='argument' else ""}
+    </div>
     <script>
     const nodes = {nodes_json};
     const links = {links_json};
     const width = 1400, height = 900;
     const rootID = "{center_title.replace('"', '\\"')}";
+
+    function getNodeColor(type, id) {{
+        // Default: concept/structure modes: all same color except root
+        if ("{mode}" !== "argument") {{
+            return id === rootID ? "#eaf0fe" : "#fff";
+        }}
+        // For argument map
+        const t = (type || "").toLowerCase();
+        if (t === "thesis") return "#3B82F6";
+        if (t === "supporting argument") return "#22C55E";
+        if (t === "evidence") return "#D1D5DB";
+        if (t === "counterargument") return "#F87171";
+        return "#D1D5DB";
+    }}
 
     const svg = d3.select("#mindmap").append("svg")
         .attr("width", width)
@@ -233,7 +246,7 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
 
     node.append("circle")
         .attr("r", d => d.id === rootID ? 110 : 75)
-        .attr("fill", d => d.id === rootID ? "#eaf0fe" : "#fff")
+        .attr("fill", d => getNodeColor(d.type, d.id))
         .attr("stroke", "#528fff").attr("stroke-width", 3)
         .on("mouseover", function(e, d) {{
             if(d.tooltip) {{
@@ -335,6 +348,15 @@ def tree_map_txt(tree, level=0):
         txt += tree_map_txt(child, level+1)
     return txt
 
+def argument_map_txt(tree, level=0):
+    txt = ""
+    indent = "  " * level
+    node_type = tree.get("type", "")
+    txt += f"{indent}- [{node_type}] {tree.get('name', '')}: {tree.get('tooltip', '')}\n"
+    for child in tree.get("children", []):
+        txt += argument_map_txt(child, level+1)
+    return txt
+
 # --- SESSION STATE INIT ---
 for key in ["file_hash", "full_text", "pdf_title", "concept_map", "structure_map", "argument_map", "view_mode"]:
     if key not in st.session_state:
@@ -381,7 +403,7 @@ view_mode = st.session_state.get("view_mode", "Concept Map")
 if uploaded_file and concept_map and structure_map and argument_map:
     if view_mode == "Concept Map":
         concept_tree = concept_map_to_tree(concept_map, root_title=pdf_title)
-        mindmap_html = create_multilevel_mindmap_html(concept_tree, center_title=pdf_title)
+        mindmap_html = create_multilevel_mindmap_html(concept_tree, center_title=pdf_title, mode="concept")
         st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
         txt_data = concept_map_txt(concept_map)
         st.sidebar.download_button(
@@ -392,7 +414,7 @@ if uploaded_file and concept_map and structure_map and argument_map:
         )
     elif view_mode == "Structure Map":
         if structure_map and structure_map.get("children"):
-            mindmap_html = create_multilevel_mindmap_html(structure_map, center_title=structure_map.get("name", "Root"))
+            mindmap_html = create_multilevel_mindmap_html(structure_map, center_title=structure_map.get("name", "Root"), mode="structure")
             st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
             txt_data = tree_map_txt(structure_map)
             st.sidebar.download_button(
@@ -405,9 +427,9 @@ if uploaded_file and concept_map and structure_map and argument_map:
             st.info("No structure was extracted.")
     elif view_mode == "Argument Map":
         if argument_map and argument_map.get("children"):
-            mindmap_html = create_multilevel_mindmap_html(argument_map, center_title=argument_map.get("name", "Root"))
+            mindmap_html = create_multilevel_mindmap_html(argument_map, center_title=argument_map.get("name", "Root"), mode="argument")
             st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
-            txt_data = tree_map_txt(argument_map)
+            txt_data = argument_map_txt(argument_map)
             st.sidebar.download_button(
                 label="Download Argument Map as TXT",
                 data=txt_data,
