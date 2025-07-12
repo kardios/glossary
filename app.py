@@ -4,6 +4,7 @@ import json
 import tempfile
 from openai import OpenAI
 import hashlib
+import re
 
 client = OpenAI()
 
@@ -20,6 +21,23 @@ def extract_text_from_pdf(pdf_file):
         doc = fitz.open(tmpfile.name)
         full_text = "\n\n".join(page.get_text() for page in doc)
     return full_text
+
+# --- Robust JSON Extraction ---
+def robust_json_extract(raw, want_list=False):
+    # Try to find a top-level {...} or [...] block
+    m = re.search(r'(\{[\s\S]+\})', raw)
+    if not m and want_list:
+        m = re.search(r'(\[[\s\S]+\])', raw)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            pass
+    # fallback
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
 
 # --- LLM PROMPTS ---
 def prompt_concept_map(full_text, max_terms=MAX_TERMS):
@@ -84,38 +102,28 @@ def get_concept_map(full_text, max_terms=MAX_TERMS):
     input_prompt = prompt_concept_map(full_text, max_terms)
     response = client.responses.create(model="gpt-4.1", input=input_prompt)
     glossary_json = response.output_text
-    start = glossary_json.find('[')
-    end = glossary_json.rfind(']')
-    if start != -1 and end != -1:
-        glossary_json = glossary_json[start:end+1]
-    glossary = json.loads(glossary_json)
-    return glossary[:max_terms]
+    result = robust_json_extract(glossary_json, want_list=True)
+    if not result:
+        return []
+    return result[:max_terms]
 
 def get_structure_map(full_text):
     prompt = prompt_structure_map(full_text)
     response = client.responses.create(model="gpt-4.1", input=prompt)
     raw = response.output_text
-    first = raw.find('{')
-    last = raw.rfind('}')
-    if first != -1 and last != -1:
-        try:
-            return json.loads(raw[first:last+1])
-        except Exception:
-            pass
-    return {}
+    result = robust_json_extract(raw)
+    if not result:
+        return {}
+    return result
 
 def get_argument_map(full_text):
     prompt = prompt_argument_map(full_text)
     response = client.responses.create(model="gpt-4.1", input=prompt)
     raw = response.output_text
-    first = raw.find('{')
-    last = raw.rfind('}')
-    if first != -1 and last != -1:
-        try:
-            return json.loads(raw[first:last+1])
-        except Exception:
-            pass
-    return {}
+    result = robust_json_extract(raw)
+    if not result:
+        return {}
+    return result
 
 def get_pdf_title_from_content(full_text, max_words=8, chunk_size=1000):
     chunk = ' '.join(full_text.split()[:chunk_size])
@@ -155,7 +163,7 @@ def flatten_tree_to_nodes_links(tree, parent_name=None, nodes=None, links=None):
     nodes.append({"id": this_id, "tooltip": tooltip, "type": node_type})
     if parent_name:
         links.append({"source": parent_name, "target": this_id})
-    for child in tree.get("children", []):
+    for child in tree.get("children", []) or []:
         flatten_tree_to_nodes_links(child, this_id, nodes, links)
     return nodes, links
 
@@ -207,11 +215,10 @@ def create_multilevel_mindmap_html(tree, center_title="Root", mode="concept"):
     const rootID = "{center_title.replace('"', '\\"')}";
 
     function getNodeColor(type, id) {{
-        // Default: concept/structure modes: all same color except root
         if ("{mode}" !== "argument") {{
             return id === rootID ? "#eaf0fe" : "#fff";
         }}
-        // For argument map
+        // Argument map colors
         const t = (type || "").toLowerCase();
         if (t === "thesis") return "#3B82F6";
         if (t === "supporting argument") return "#22C55E";
@@ -344,7 +351,7 @@ def tree_map_txt(tree, level=0):
     txt = ""
     indent = "  " * level
     txt += f"{indent}- {tree.get('name', '')}: {tree.get('tooltip', '')}\n"
-    for child in tree.get("children", []):
+    for child in tree.get("children", []) or []:
         txt += tree_map_txt(child, level+1)
     return txt
 
@@ -353,7 +360,7 @@ def argument_map_txt(tree, level=0):
     indent = "  " * level
     node_type = tree.get("type", "")
     txt += f"{indent}- [{node_type}] {tree.get('name', '')}: {tree.get('tooltip', '')}\n"
-    for child in tree.get("children", []):
+    for child in tree.get("children", []) or []:
         txt += argument_map_txt(child, level+1)
     return txt
 
