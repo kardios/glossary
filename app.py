@@ -5,18 +5,9 @@ import json
 import tempfile
 from openai import OpenAI
 
-# --- OPENAI SETUP ---
 client = OpenAI()
-
 st.set_page_config(page_title="PDF Glossary Mindmap", layout="wide")
 st.title("🧠 PDF Glossary Mindmap Explorer")
-st.write("Streamlit version:", st.__version__)
-
-# --- PDF UPLOAD ---
-with st.sidebar:
-    st.header("Upload PDF")
-    uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
-    st.write("---")
 
 # --- PDF TEXT EXTRACTION ---
 def extract_text_from_pdf(pdf_file):
@@ -27,7 +18,6 @@ def extract_text_from_pdf(pdf_file):
         full_text = "\n\n".join(page.get_text() for page in doc)
     return full_text
 
-# --- LLM TITLE FROM CONTENT ---
 def get_pdf_title_from_content(full_text, max_words=8, chunk_size=1000):
     chunk = ' '.join(full_text.split()[:chunk_size])
     prompt = (
@@ -48,7 +38,6 @@ def get_pdf_title_from_content(full_text, max_words=8, chunk_size=1000):
     except Exception:
         return "Untitled Document"
 
-# --- GLOSSARY EXTRACTION (GPT-4.1 Responses API) ---
 def get_glossary_via_gpt41(full_text, max_terms=16):
     input_prompt = (
         f"Extract up to {max_terms} key glossary terms from the following document.\n"
@@ -69,7 +58,6 @@ def get_glossary_via_gpt41(full_text, max_terms=16):
         glossary_json = glossary_json[start:end+1]
     return json.loads(glossary_json)
 
-# --- SUMMARY WITH WEB SEARCH (GPT-4.1 Responses API) ---
 def get_summary_with_web_search(term, context_text=None):
     base_prompt = (
         f"Write a concise, one-paragraph explanation of the term '{term}'. "
@@ -84,7 +72,6 @@ def get_summary_with_web_search(term, context_text=None):
     )
     return response.output_text
 
-# --- CSV EXPORT ---
 def glossary_to_csv(glossary, summaries):
     df = pd.DataFrame([
         {"term": item["term"], "tooltip": item["tooltip"], "summary": summaries.get(item["term"], "")}
@@ -92,7 +79,6 @@ def glossary_to_csv(glossary, summaries):
     ])
     return df.to_csv(index=False)
 
-# --- D3 MINDMAP HTML WITH DRAGGING AND TEXT WRAPPING ---
 def create_mindmap_html(glossary, root_title="Glossary"):
     nodes = [
         {"id": root_title, "group": 0}
@@ -118,7 +104,7 @@ def create_mindmap_html(glossary, root_title="Glossary"):
     <script>
     const nodes = {json.dumps(nodes)};
     const links = {json.dumps(links)};
-    const width = 1000, height = 800;
+    const width = 1400, height = 900;
     const svg = d3.select("#mindmap").append("svg")
         .attr("width", width).attr("height", height);
     const simulation = d3.forceSimulation(nodes)
@@ -127,12 +113,10 @@ def create_mindmap_html(glossary, root_title="Glossary"):
         .force("center", d3.forceCenter(width / 2, height / 2))
         .force("collision", d3.forceCollide().radius(80));
 
-    // Links
     const link = svg.append("g")
         .selectAll("line").data(links).enter().append("line")
         .attr("stroke", "#b8cfff").attr("stroke-width", 2);
 
-    // Nodes
     const node = svg.append("g")
         .selectAll("g")
         .data(nodes).enter().append("g")
@@ -155,7 +139,6 @@ def create_mindmap_html(glossary, root_title="Glossary"):
             tooltip.style("opacity", 0);
         }});
 
-    // Text wrapping for node labels with vertical centering for root
     node.append("text")
         .attr("text-anchor", "middle")
         .style("font-size", d => d.group === 0 ? "1.4em" : "1.08em")
@@ -183,7 +166,6 @@ def create_mindmap_html(glossary, root_title="Glossary"):
             }});
         }});
 
-    // DRAG BEHAVIOR
     node.call(
       d3.drag()
         .on("start", dragstarted)
@@ -217,10 +199,8 @@ def create_mindmap_html(glossary, root_title="Glossary"):
             .attr("transform", d => `translate(${{d.x}},${{d.y}})`);
     }});
 
-    // Tooltip
     const tooltip = d3.select("body").append("div")
         .attr("class", "tooltip-glossary");
-
     </script>
     """
     return mindmap_html
@@ -236,6 +216,10 @@ if "summaries" not in st.session_state:
     st.session_state.summaries = None
 
 # --- MAIN WORKFLOW ---
+with st.sidebar:
+    uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
+    st.write("---")
+
 if uploaded_file:
     with st.spinner("Extracting text from PDF..."):
         full_text = extract_text_from_pdf(uploaded_file)
@@ -246,45 +230,46 @@ if uploaded_file:
         st.session_state.glossary = glossary
     with st.spinner("Pre-generating all summaries (with web citations)..."):
         summaries = {}
-        for item in glossary:
+        N = len(glossary)
+        progress_bar = st.progress(0, text="Generating summaries...")
+        for idx, item in enumerate(glossary, 1):
             try:
                 summaries[item["term"]] = get_summary_with_web_search(item["term"], full_text)
             except Exception as e:
                 summaries[item["term"]] = "Error generating summary."
+            progress_bar.progress(idx/N, text=f"Generating summaries... ({idx}/{N})")
+        progress_bar.empty()
         st.session_state.summaries = summaries
 
 glossary = st.session_state.get("glossary")
-full_text = st.session_state.get("full_text", "")
 pdf_title = st.session_state.get("pdf_title", "Document")
 summaries = st.session_state.get("summaries", {})
 
-# --- SIDEBAR: CSV DOWNLOAD ---
+# --- SIDEBAR: GLOSSARY UI ---
 if glossary and summaries:
     csv_data = glossary_to_csv(glossary, summaries)
-    st.sidebar.download_button(
-        label="Download Glossary as CSV",
-        data=csv_data,
-        file_name="glossary.csv",
-        mime="text/csv"
-    )
-
-# --- TWO COLUMN LAYOUT ---
-if glossary and summaries:
-    col1, col2 = st.columns([2.2, 1.5])  # Wider for mindmap
-
-    with col1:
-        st.subheader(f"Glossary Mindmap (Root: {pdf_title})")
-        mindmap_html = create_mindmap_html(glossary, root_title=pdf_title)
-        st.components.v1.html(mindmap_html, height=850, width=1000, scrolling=False)
-
-    with col2:
+    with st.sidebar:
+        st.download_button(
+            label="Download Glossary as CSV",
+            data=csv_data,
+            file_name="glossary.csv",
+            mime="text/csv"
+        )
+        st.write("---")
         st.subheader("Glossary Term Summary")
         selected_term = st.selectbox(
             "Select a glossary term to see summary (with citations):",
-            options=[item["term"] for item in glossary]
+            options=[item["term"] for item in glossary],
+            key="selected_term"
         )
-        if selected_term and summaries:
+        if selected_term:
             st.markdown(f"**{selected_term}**")
             st.markdown(summaries[selected_term], unsafe_allow_html=True)
+
+# --- MAIN: MINDMAP ---
+if glossary:
+    st.subheader(f"Glossary Mindmap (Root: {pdf_title})")
+    mindmap_html = create_mindmap_html(glossary, root_title=pdf_title)
+    st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
 
 st.caption("Powered by OpenAI GPT-4.1 with live web search for summaries. © 2025")
