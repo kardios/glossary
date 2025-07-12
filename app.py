@@ -5,9 +5,10 @@ import json
 import tempfile
 from openai import OpenAI
 from streamlit_js_eval import streamlit_js_eval
+from streamlit_modal import Modal
 
-# --- INIT OPENAI ---
-client = OpenAI()  # uses env OPENAI_API_KEY
+# --- OPENAI SETUP ---
+client = OpenAI()  # Uses env var OPENAI_API_KEY
 
 st.set_page_config(page_title="PDF Glossary Mindmap", layout="wide")
 st.title("🧠 PDF Glossary Mindmap Explorer")
@@ -27,7 +28,7 @@ def extract_text_from_pdf(pdf_file):
         full_text = "\n\n".join(page.get_text() for page in doc)
     return full_text
 
-# --- GLOSSARY EXTRACTION (GPT-4.1, Responses API) ---
+# --- GLOSSARY EXTRACTION (GPT-4.1 Responses API) ---
 def get_glossary_via_gpt41(full_text, max_terms=20):
     input_prompt = (
         f"Extract up to {max_terms} key glossary terms from the following document.\n"
@@ -42,14 +43,14 @@ def get_glossary_via_gpt41(full_text, max_terms=20):
         input=input_prompt,
     )
     glossary_json = response.output_text
-    # Extract JSON from response (handle any preamble/epilogue)
+    # Extract just the JSON array (ignore extra text)
     start = glossary_json.find('[')
     end = glossary_json.rfind(']')
     if start != -1 and end != -1:
         glossary_json = glossary_json[start:end+1]
     return json.loads(glossary_json)
 
-# --- SUMMARY WITH WEB SEARCH (GPT-4.1, Responses API) ---
+# --- SUMMARY WITH WEB SEARCH (GPT-4.1 Responses API) ---
 def get_summary_with_web_search(term, context_text=None):
     base_prompt = (
         f"Write a concise, one-paragraph explanation of the term '{term}'. "
@@ -226,15 +227,19 @@ if glossary:
 # --- MODAL SUMMARY ON TERM CLICK ---
 if st.session_state.get("clicked_term"):
     term = st.session_state.clicked_term
-    with st.spinner(f"Summarizing '{term}' (with web citations)..."):
-        summary = get_summary_with_web_search(term, full_text)
-    st.markdown(f"### {term}")
-    st.markdown(summary, unsafe_allow_html=True)
-    if uploaded_file:
-        st.markdown(
-            f'<a href="data:application/pdf;base64,{uploaded_file.getvalue().decode("ISO-8859-1")}" download="{uploaded_file.name}" target="_blank" style="font-weight:bold;">Open PDF</a>',
-            unsafe_allow_html=True
-        )
+    modal = Modal(term, key=f"modal_{term}", padding=20)
+    modal.open()
+    if modal.is_open():
+        with modal.container():
+            with st.spinner(f"Summarizing '{term}' (with web citations)..."):
+                summary = get_summary_with_web_search(term, full_text)
+            st.markdown(f"### {term}")
+            st.markdown(summary, unsafe_allow_html=True)
+            if uploaded_file:
+                st.markdown(
+                    f'<a href="data:application/pdf;base64,{uploaded_file.getvalue().decode("ISO-8859-1")}" download="{uploaded_file.name}" target="_blank" style="font-weight:bold;">Open PDF</a>',
+                    unsafe_allow_html=True
+                )
     st.session_state.clicked_term = None
 
 st.caption("Powered by OpenAI GPT-4.1 with live web search for term summaries. © 2025")
