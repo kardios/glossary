@@ -171,7 +171,7 @@ def create_mindmap_html(glossary, root_title="Glossary"):
             }}
         }});
 
-    // Text wrapping for node labels with strong vertical centering for root
+    // Text wrapping for node labels with vertical centering for root
     node.append("text")
         .attr("text-anchor", "middle")
         .style("font-size", d => d.group === 0 ? "1.4em" : "1.08em")
@@ -190,7 +190,7 @@ def create_mindmap_html(glossary, root_title="Glossary"):
                 }}
             }});
             if (current.trim()) lines.push(current.trim());
-            let startDy = d.group === 0 ? -((lines.length - 1) / 2) * 1.1 : 0;
+            const startDy = d.group === 0 ? -((lines.length - 1) / 2) * 1.1 : 0;
             lines.forEach((line, i) => {{
                 text.append("tspan")
                     .attr("x", 0)
