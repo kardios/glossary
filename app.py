@@ -4,7 +4,6 @@ import pandas as pd
 import json
 import tempfile
 from openai import OpenAI
-from streamlit_modal import Modal
 
 # --- OPENAI SETUP ---
 client = OpenAI()
@@ -86,8 +85,11 @@ def get_summary_with_web_search(term, context_text=None):
     return response.output_text
 
 # --- CSV EXPORT ---
-def glossary_to_csv(glossary):
-    df = pd.DataFrame(glossary)
+def glossary_to_csv(glossary, summaries):
+    df = pd.DataFrame([
+        {"term": item["term"], "tooltip": item["tooltip"], "summary": summaries.get(item["term"], "")}
+        for item in glossary
+    ])
     return df.to_csv(index=False)
 
 # --- D3 MINDMAP HTML WITH DRAGGING AND TEXT WRAPPING ---
@@ -116,7 +118,7 @@ def create_mindmap_html(glossary, root_title="Glossary"):
     <script>
     const nodes = {json.dumps(nodes)};
     const links = {json.dumps(links)};
-    const width = 1400, height = 880;
+    const width = 1000, height = 800;
     const svg = d3.select("#mindmap").append("svg")
         .attr("width", width).attr("height", height);
     const simulation = d3.forceSimulation(nodes)
@@ -230,6 +232,8 @@ if "full_text" not in st.session_state:
     st.session_state.full_text = ""
 if "pdf_title" not in st.session_state:
     st.session_state.pdf_title = None
+if "summaries" not in st.session_state:
+    st.session_state.summaries = None
 
 # --- MAIN WORKFLOW ---
 if uploaded_file:
@@ -240,37 +244,47 @@ if uploaded_file:
     with st.spinner("Extracting glossary using GPT-4.1..."):
         glossary = get_glossary_via_gpt41(full_text, max_terms=16)
         st.session_state.glossary = glossary
+    with st.spinner("Pre-generating all summaries (with web citations)..."):
+        summaries = {}
+        for item in glossary:
+            try:
+                summaries[item["term"]] = get_summary_with_web_search(item["term"], full_text)
+            except Exception as e:
+                summaries[item["term"]] = "Error generating summary."
+        st.session_state.summaries = summaries
 
 glossary = st.session_state.get("glossary")
 full_text = st.session_state.get("full_text", "")
 pdf_title = st.session_state.get("pdf_title", "Document")
+summaries = st.session_state.get("summaries", {})
 
-# --- SIDEBAR: CSV & SUMMARY SELECT ---
-if glossary:
-    csv_data = glossary_to_csv(glossary)
+# --- SIDEBAR: CSV DOWNLOAD ---
+if glossary and summaries:
+    csv_data = glossary_to_csv(glossary, summaries)
     st.sidebar.download_button(
         label="Download Glossary as CSV",
         data=csv_data,
         file_name="glossary.csv",
         mime="text/csv"
     )
-    st.sidebar.write("---")
-    st.sidebar.subheader("Glossary Term Summary")
-    selected_term = st.sidebar.selectbox(
-        "Click a glossary term to see summary (with citations):",
-        options=[item["term"] for item in glossary]
-    )
-    if selected_term:
-        with st.sidebar:
-            with st.spinner(f"Summarizing '{selected_term}' (with web citations)..."):
-                summary = get_summary_with_web_search(selected_term, full_text)
+
+# --- TWO COLUMN LAYOUT ---
+if glossary and summaries:
+    col1, col2 = st.columns([2.2, 1.5])  # Wider for mindmap
+
+    with col1:
+        st.subheader(f"Glossary Mindmap (Root: {pdf_title})")
+        mindmap_html = create_mindmap_html(glossary, root_title=pdf_title)
+        st.components.v1.html(mindmap_html, height=850, width=1000, scrolling=False)
+
+    with col2:
+        st.subheader("Glossary Term Summary")
+        selected_term = st.selectbox(
+            "Select a glossary term to see summary (with citations):",
+            options=[item["term"] for item in glossary]
+        )
+        if selected_term and summaries:
             st.markdown(f"**{selected_term}**")
-            st.markdown(summary, unsafe_allow_html=True)
+            st.markdown(summaries[selected_term], unsafe_allow_html=True)
 
-# --- MINDMAP ---
-if glossary:
-    st.subheader(f"Glossary Mindmap (Root: {pdf_title})")
-    mindmap_html = create_mindmap_html(glossary, root_title=pdf_title)
-    st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)  # No allow_scripts
-
-st.caption("Powered by OpenAI GPT-4.1 with live web search for term summaries. © 2025")
+st.caption("Powered by OpenAI GPT-4.1 with live web search for summaries. © 2025")
