@@ -10,7 +10,6 @@ client = OpenAI()
 st.set_page_config(page_title="PDF Glossary Mindmap", layout="wide")
 st.title("🧠 PDF Glossary Mindmap Explorer")
 
-# --- PDF TEXT EXTRACTION ---
 def extract_text_from_pdf(pdf_file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
         tmpfile.write(pdf_file.read())
@@ -62,23 +61,9 @@ def get_glossary_via_gpt41(full_text, max_terms=MAX_TERMS):
     glossary = json.loads(glossary_json)
     return glossary[:max_terms]  # Enforce hard cap
 
-def get_summary_with_web_search(term, context_text=None):
-    base_prompt = (
-        f"Write a concise, one-paragraph explanation of the term '{term}'. "
-        "Include up-to-date, reputable internet citations (with direct URLs as hyperlinks) in your answer. "
-    )
-    if context_text:
-        base_prompt += f"Use this as reference context (if helpful):\n{context_text}\n"
-    response = client.responses.create(
-        model="gpt-4.1",
-        tools=[{"type": "web_search_preview"}],
-        input=base_prompt,
-    )
-    return response.output_text
-
-def glossary_to_csv(glossary, summaries):
+def glossary_to_csv(glossary):
     df = pd.DataFrame([
-        {"term": item["term"], "tooltip": item["tooltip"], "summary": summaries.get(item["term"], "")}
+        {"term": item["term"], "tooltip": item["tooltip"]}
         for item in glossary
     ])
     return df.to_csv(index=False)
@@ -218,15 +203,12 @@ if "full_text" not in st.session_state:
     st.session_state.full_text = ""
 if "pdf_title" not in st.session_state:
     st.session_state.pdf_title = None
-if "summaries" not in st.session_state:
-    st.session_state.summaries = None
 
 # --- SIDEBAR: FILE UPLOAD ---
 with st.sidebar:
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
     st.write("---")
 
-# --- DETECT NEW FILE UPLOAD (using hash) ---
 def compute_file_hash(file_obj):
     file_obj.seek(0)
     data = file_obj.read()
@@ -244,26 +226,13 @@ if uploaded_file:
         with st.spinner("Extracting glossary using GPT-4.1..."):
             glossary = get_glossary_via_gpt41(full_text, max_terms=MAX_TERMS)
             st.session_state.glossary = glossary
-        with st.spinner("Pre-generating all summaries (with web citations)..."):
-            summaries = {}
-            N = len(glossary)
-            progress_bar = st.progress(0, text="Generating summaries...")
-            for idx, item in enumerate(glossary, 1):
-                try:
-                    summaries[item["term"]] = get_summary_with_web_search(item["term"], full_text)
-                except Exception:
-                    summaries[item["term"]] = "Error generating summary."
-                progress_bar.progress(idx/N, text=f"Generating summaries... ({idx}/{N})")
-            progress_bar.empty()
-            st.session_state.summaries = summaries
 
 glossary = st.session_state.get("glossary")
 pdf_title = st.session_state.get("pdf_title", "Document")
-summaries = st.session_state.get("summaries", {})
 
-# --- SIDEBAR: GLOSSARY UI ---
-if glossary and summaries:
-    csv_data = glossary_to_csv(glossary, summaries)
+# --- SIDEBAR: CSV DOWNLOAD ---
+if glossary:
+    csv_data = glossary_to_csv(glossary)
     with st.sidebar:
         st.download_button(
             label="Download Glossary as CSV",
@@ -271,16 +240,6 @@ if glossary and summaries:
             file_name="glossary.csv",
             mime="text/csv"
         )
-        st.write("---")
-        st.subheader("Glossary Term Summary")
-        selected_term = st.selectbox(
-            "Select a glossary term to see summary (with citations):",
-            options=[item["term"] for item in glossary],
-            key="selected_term"
-        )
-        if selected_term:
-            st.markdown(f"**{selected_term}**")
-            st.markdown(summaries[selected_term], unsafe_allow_html=True)
 
 # --- MAIN: MINDMAP ---
 if glossary:
@@ -288,4 +247,4 @@ if glossary:
     mindmap_html = create_mindmap_html(glossary, root_title=pdf_title)
     st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
 
-st.caption("Powered by OpenAI GPT-4.1 with live web search for summaries. © 2025")
+st.caption("Powered by OpenAI GPT-4.1. © 2025")
