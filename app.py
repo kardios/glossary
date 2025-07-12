@@ -116,24 +116,24 @@ def create_mindmap_html(glossary, root_title="Glossary"):
     <div id="mindmap"></div>
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
-    #mindmap {{ width:100%; height:640px; min-height:480px; background:#f7faff; border-radius:18px; }}
+    #mindmap {{ width:100%; height:880px; min-height:700px; background:#f7faff; border-radius:18px; }}
     .tooltip-glossary {{
         position: absolute; pointer-events: none; background: #fff; border: 1.5px solid #4f7cda; border-radius: 8px;
         padding: 10px 13px; font-size: 1em; color: #2c4274; box-shadow: 0 2px 12px rgba(60,100,180,0.15); z-index: 10;
-        opacity: 0; transition: opacity 0.18s; max-width: 260px;
+        opacity: 0; transition: opacity 0.18s; max-width: 300px;
     }}
     </style>
     <script>
     const nodes = {json.dumps(nodes)};
     const links = {json.dumps(links)};
-    const width = 900, height = 620;
+    const width = 1400, height = 880;
     const svg = d3.select("#mindmap").append("svg")
         .attr("width", width).attr("height", height);
     const simulation = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(links).id(d => d.id).distance(220))
-        .force("charge", d3.forceManyBody().strength(-900))
+        .force("link", d3.forceLink(links).id(d => d.id).distance(270))
+        .force("charge", d3.forceManyBody().strength(-1500))
         .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("collision", d3.forceCollide().radius(70));
+        .force("collision", d3.forceCollide().radius(80));
 
     // Links
     const link = svg.append("g")
@@ -147,7 +147,7 @@ def create_mindmap_html(glossary, root_title="Glossary"):
         .attr("class", "node");
 
     node.append("circle")
-        .attr("r", d => d.group === 0 ? 74 : 56)
+        .attr("r", d => d.group === 0 ? 100 : 75)
         .attr("fill", d => d.group === 0 ? "#eaf0fe" : "#fff")
         .attr("stroke", "#528fff").attr("stroke-width", 3)
         .on("mouseover", function(e, d) {{
@@ -171,11 +171,10 @@ def create_mindmap_html(glossary, root_title="Glossary"):
     // Text wrapping for node labels
     node.append("text")
         .attr("text-anchor", "middle")
-        .style("font-size", d => d.group === 0 ? "1.2em" : "1em")
+        .style("font-size", d => d.group === 0 ? "1.5em" : "1.08em")
         .selectAll("tspan")
         .data(d => {{
-            // Wrap lines to ~13 chars for child, ~22 for root
-            const maxChars = d.group === 0 ? 22 : 13;
+            const maxChars = d.group === 0 ? 28 : 16;
             const words = d.id.split(' ');
             let lines = [];
             let current = '';
@@ -275,7 +274,7 @@ if glossary:
 if glossary:
     st.subheader(f"Glossary Mindmap (Root: {pdf_title})")
     mindmap_html = create_mindmap_html(glossary, root_title=pdf_title)
-    st.components.v1.html(mindmap_html, height=670, width=930, scrolling=False)
+    st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
 
     # Listen for JS bubble click events
     clicked_term = streamlit_js_eval(
