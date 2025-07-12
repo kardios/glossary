@@ -5,8 +5,11 @@ import json
 import tempfile
 from openai import OpenAI
 import hashlib
+import re
 
 client = OpenAI()
+
+# --- APP NAME & PAGE CONFIG ---
 st.set_page_config(page_title="Bubble Mindmap Explorer", layout="wide")
 st.title("🧠 Bubble Mindmap Explorer")
 
@@ -66,29 +69,28 @@ def prompt_hierarchical_map(full_text):
         f"{full_text}"
     )
 
-def prompt_entity_map(full_text):
+def prompt_stakeholder_map(full_text):
     return (
-        "Extract all major named people, organizations, and locations mentioned in the following document. For each, specify:\n"
-        "- \"id\": The name of the entity (as it appears).\n"
-        "- \"type\": One of \"Person\", \"Organization\", or \"Location\".\n"
-        "- \"description\": A one-sentence summary of the entity's role or significance in the document.\n\n"
-        "Then, for every *direct* relationship between two entities (such as collaboration, employment, leadership, membership, affiliation, geographical location, or notable conflict/partnership), include an edge with:\n"
-        "- \"source\": Name of the first entity.\n"
-        "- \"target\": Name of the second entity.\n"
-        "- \"relationship\": Short label (e.g., \"CEO\", \"affiliated with\", \"based in\", \"partner\", \"conflict\").\n\n"
-        "Return as valid JSON with this structure:\n"
+        "Extract all stakeholder groups mentioned or implied in the document—such as organizations, agencies, interest groups, professions, communities, or segments of the public. For each stakeholder:\n"
+        '- "id": Group or organization name (as it appears)\n'
+        '- "role": One sentence on their role, interest, or position in the context of the document\n\n'
+        "Then, for each direct relationship or interaction (e.g., collaboration, influence, conflict, regulation, support, opposition, dependency, or affected-by), list an edge:\n"
+        '- "source": Stakeholder 1\n'
+        '- "target": Stakeholder 2\n'
+        '- "relationship": Short label (e.g., \"regulates\", \"supports\", \"opposes\", \"influences\", \"benefits from\")\n\n'
+        "Return valid JSON:\n"
         "{\n"
-        "  \"nodes\": [\n"
-        "    {\"id\": \"Name 1\", \"type\": \"Person\", \"description\": \"...\"},\n"
-        "    {\"id\": \"Org A\", \"type\": \"Organization\", \"description\": \"...\"},\n"
-        "    {\"id\": \"City X\", \"type\": \"Location\", \"description\": \"...\"}\n"
-        "  ],\n"
-        "  \"edges\": [\n"
-        "    {\"source\": \"Name 1\", \"target\": \"Org A\", \"relationship\": \"CEO\"},\n"
-        "    {\"source\": \"Org A\", \"target\": \"City X\", \"relationship\": \"Headquartered in\"}\n"
-        "  ]\n"
-        "}\n\n"
-        "Only output the JSON. Do not include any commentary or explanation.\n\n"
+        '  "nodes": [\n'
+        '    {"id": "Ministry of Health", "role": "Sets policy and regulates healthcare providers."},\n'
+        '    {"id": "Hospitals", "role": "Provide health services to patients."},\n'
+        '    {"id": "Patients", "role": "Receive care and are directly affected by policy."}\n'
+        '  ],\n'
+        '  "edges": [\n'
+        '    {"source": "Ministry of Health", "target": "Hospitals", "relationship": "regulates"},\n'
+        '    {"source": "Hospitals", "target": "Patients", "relationship": "serves"}\n'
+        '  ]\n'
+        '}\n\n'
+        "Do not add explanations or commentary. Only output the JSON.\n\n"
         "Document:\n"
         "---\n"
         f"{full_text}"
@@ -119,18 +121,19 @@ def get_hierarchical_mindmap(full_text):
             pass
     return {}
 
-def get_entity_map(full_text):
-    prompt = prompt_entity_map(full_text)
+def get_stakeholder_map(full_text):
+    prompt = prompt_stakeholder_map(full_text)
     response = client.responses.create(model="gpt-4.1", input=prompt)
     raw = response.output_text
-    first = raw.find('{')
-    last = raw.rfind('}')
-    if first != -1 and last != -1:
+    match = re.search(r'({.*})', raw, re.DOTALL)
+    if match:
         try:
-            return json.loads(raw[first:last+1])
-        except Exception:
-            pass
-    return {}
+            return json.loads(match.group(1))
+        except Exception as e:
+            st.warning(f"Failed to parse stakeholder map JSON: {e}")
+    else:
+        st.info("No valid stakeholder map JSON found.")
+    return {"nodes": [], "edges": []}
 
 def get_pdf_title_from_content(full_text, max_words=8, chunk_size=1000):
     chunk = ' '.join(full_text.split()[:chunk_size])
@@ -310,19 +313,19 @@ def create_multilevel_mindmap_html(tree, center_title="Root"):
     """
     return mindmap_html
 
-def create_entity_map_html(entity_data):
-    nodes = entity_data.get("nodes", [])
-    edges = entity_data.get("edges", [])
-    color_map = {"Person": "#8dd3c7", "Organization": "#bebada", "Location": "#ffd92f"}
+def create_stakeholder_map_html(stakeholder_data):
+    nodes = stakeholder_data.get("nodes", [])
+    edges = stakeholder_data.get("edges", [])
+    color = "#A7C7E7"
     nodes_json = json.dumps([
-        {**node, "color": color_map.get(node["type"], "#cccccc")}
+        {**node, "color": color}
         for node in nodes
     ])
     edges_json = json.dumps(edges)
     html = f"""
-    <div id="entitymap"></div>
+    <div id="stakeholdermap"></div>
     <style>
-    #entitymap {{ width:100%; height:880px; background:#f7faff; border-radius:18px; }}
+    #stakeholdermap {{ width:100%; height:880px; background:#f7faff; border-radius:18px; }}
     .tooltip-entity {{
         position: absolute; pointer-events: none; background: #fff; border: 1.5px solid #666; border-radius: 8px;
         padding: 10px 13px; font-size: 1em; color: #2c4274; box-shadow: 0 2px 12px rgba(60,100,180,0.15); z-index: 10;
@@ -334,7 +337,7 @@ def create_entity_map_html(entity_data):
     const nodes = {nodes_json};
     const links = {edges_json};
     const width = 1400, height = 900;
-    const svg = d3.select("#entitymap").append("svg")
+    const svg = d3.select("#stakeholdermap").append("svg")
         .attr("width", width).attr("height", height)
         .style("background", "#f7faff");
     const container = svg.append("g");
@@ -354,7 +357,7 @@ def create_entity_map_html(entity_data):
         .attr("fill", d => d.color)
         .attr("stroke", "#528fff").attr("stroke-width", 3)
         .on("mouseover", function(e, d) {{
-            tooltip.style("opacity", 1).html("<b>" + d.id + "</b><br>(" + d.type + ")<br>" + d.description)
+            tooltip.style("opacity", 1).html("<b>" + d.id + "</b><br>(" + d.role + ")")
               .style("left", (e.pageX+12)+"px").style("top", (e.pageY-18)+"px");
         }})
         .on("mousemove", function(e) {{
@@ -384,134 +387,4 @@ def create_entity_map_html(entity_data):
             if (current.trim()) lines.push(current.trim());
             const startDy = -((lines.length - 1) / 2) * 1.1;
             lines.forEach((line, i) => {{
-                text.append("tspan")
-                    .attr("x", 0)
-                    .attr("dy", i === 0 ? `${{startDy}}em` : "1.1em")
-                    .text(line);
-            }});
-        }});
-
-    node.call(
-      d3.drag()
-        .on("start", dragstarted)
-        .on("drag", dragged)
-        .on("end", dragended)
-    );
-    function dragstarted(event, d) {{
-        if (!event.active) simulation.alphaTarget(0.3).restart();
-        d.fx = d.x;
-        d.fy = d.y;
-    }}
-    function dragged(event, d) {{
-        d.fx = event.x;
-        d.fy = event.y;
-    }}
-    function dragended(event, d) {{
-        if (!event.active) simulation.alphaTarget(0);
-        d.fx = null;
-        d.fy = null;
-    }}
-
-    const simulation = d3.forceSimulation(nodes)
-        .force("link", d3.forceLink(links).id(d => d.id).distance(230))
-        .force("charge", d3.forceManyBody().strength(-1200))
-        .force("center", d3.forceCenter(width / 2, height / 2))
-        .force("collision", d3.forceCollide().radius(72));
-    simulation.on("tick", () => {{
-        link
-            .attr("x1", d => d.source.x)
-            .attr("y1", d => d.source.y)
-            .attr("x2", d => d.target.x)
-            .attr("y2", d => d.target.y);
-
-        node
-            .attr("transform", d => `translate(${{d.x}},${{d.y}})`);
-    }});
-
-    // Edge tooltips on hover (show relationship)
-    link.on("mouseover", function(e, d) {{
-        tooltip.style("opacity", 1).html(
-            "<b>" + d.source.id + "</b> &rarr; <b>" + d.target.id + "</b><br>"
-            + "<i>" + d.relationship + "</i>"
-        )
-        .style("left", (e.pageX+12)+"px").style("top", (e.pageY-18)+"px");
-    }}).on("mouseout", function(e,d) {{
-        tooltip.style("opacity", 0);
-    }});
-
-    const tooltip = d3.select("body").append("div")
-        .attr("class", "tooltip-entity");
-    </script>
-    """
-    return html
-
-# --- SESSION STATE INIT ---
-for key in ["file_hash", "full_text", "pdf_title", "concept_map", "hierarchical", "entity_map", "view_mode"]:
-    if key not in st.session_state:
-        st.session_state[key] = None
-
-with st.sidebar:
-    uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
-    view_mode = st.radio(
-        "Show as:",
-        ["Concept Map", "Hierarchical Map", "Entity Map"],
-        index=0,
-        key="view_mode"
-    )
-    st.write("---")
-
-def compute_file_hash(file_obj):
-    file_obj.seek(0)
-    data = file_obj.read()
-    file_obj.seek(0)
-    return hashlib.md5(data).hexdigest()
-
-if uploaded_file:
-    file_hash = compute_file_hash(uploaded_file)
-    if st.session_state.file_hash != file_hash:
-        st.session_state.file_hash = file_hash
-        with st.spinner("Extracting text from PDF..."):
-            full_text = extract_text_from_pdf(uploaded_file)
-            st.session_state.full_text = full_text
-            st.session_state.pdf_title = get_pdf_title_from_content(full_text)
-        with st.spinner("Extracting concepts..."):
-            st.session_state.concept_map = get_concept_map(st.session_state.full_text, MAX_TERMS)
-        with st.spinner("Extracting document hierarchy..."):
-            st.session_state.hierarchical = get_hierarchical_mindmap(st.session_state.full_text)
-        with st.spinner("Extracting entities..."):
-            st.session_state.entity_map = get_entity_map(st.session_state.full_text)
-
-concept_map = st.session_state.get("concept_map")
-pdf_title = st.session_state.get("pdf_title", "Document")
-hierarchical = st.session_state.get("hierarchical")
-entity_map = st.session_state.get("entity_map")
-view_mode = st.session_state.get("view_mode", "Concept Map")
-
-if uploaded_file and concept_map:
-    st.subheader(f"{view_mode} (Root: {pdf_title})")
-    if view_mode == "Concept Map":
-        csv_data = pd.DataFrame(concept_map).to_csv(index=False)
-        with st.sidebar:
-            st.download_button(
-                label="Download Glossary as CSV",
-                data=csv_data,
-                file_name="glossary.csv",
-                mime="text/csv"
-            )
-        concept_tree = concept_map_to_tree(concept_map, root_title=pdf_title)
-        mindmap_html = create_multilevel_mindmap_html(concept_tree, center_title=pdf_title)
-        st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
-    elif view_mode == "Hierarchical Map":
-        if hierarchical and hierarchical.get("children"):
-            mindmap_html = create_multilevel_mindmap_html(hierarchical, center_title=hierarchical.get("name", "Root"))
-            st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
-        else:
-            st.info("No hierarchical structure was extracted.")
-    elif view_mode == "Entity Map":
-        if entity_map and entity_map.get("nodes"):
-            entity_html = create_entity_map_html(entity_map)
-            st.components.v1.html(entity_html, height=900, width=1450, scrolling=False)
-        else:
-            st.info("No entities found in this document.")
-
-st.caption("Powered by OpenAI GPT-4.1. Three ways to explore any PDF. © 2025")
+               
