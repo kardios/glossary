@@ -28,39 +28,28 @@ def extract_text_from_pdf(pdf_file):
         full_text = "\n\n".join(page.get_text() for page in doc)
     return full_text
 
-# --- FORCE SHORT GPT-SUMMARIZED TITLE ---
-def get_pdf_title(pdf_file, full_text):
-    # Step 1: Extract raw title/gist from PDF
+# --- LLM TITLE FROM CONTENT ---
+def get_pdf_title_from_content(full_text, max_words=8, chunk_size=1000):
+    chunk = ' '.join(full_text.split()[:chunk_size])
+    prompt = (
+        f"Based on the following text, summarize the main topic or theme in a short, clear phrase suitable as the root node of a mindmap. "
+        f"Use no more than {max_words} words.\n\n"
+        f"Text:\n{chunk}"
+    )
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
-            tmpfile.write(pdf_file.read())
-            tmpfile.flush()
-            doc = fitz.open(tmpfile.name)
-            title = doc.metadata.get("title")
-            if title and title.strip() and title.lower() != "untitled":
-                raw_title = title.strip()
-            else:
-                first_page_text = doc[0].get_text().strip()
-                raw_title = next((line.strip() for line in first_page_text.splitlines() if line.strip()), "Document")
-    except Exception:
-        raw_title = "Document"
-    # Step 2: Force short GPT summary for root node (8 words max)
-    try:
-        prompt = (
-            "Summarize this document title or main topic in a concise phrase for a mindmap root node. "
-            "Use no more than 8 words, and be specific and clear.\n"
-            f"Original title or gist: {raw_title}"
-        )
         response = client.responses.create(
             model="gpt-4.1",
             input=prompt,
         )
         short_title = response.output_text.strip().split("\n")[0]
-        # Optionally enforce the word limit
-        short_title = ' '.join(short_title.split()[:8])
+        # Enforce word limit
+        short_title = ' '.join(short_title.split()[:max_words])
+        # Extra guard: avoid empty or generic
+        if not short_title or "please provide" in short_title.lower():
+            return "Untitled Document"
         return short_title
     except Exception:
-        return raw_title if len(raw_title.split()) <= 8 else "Document"
+        return "Untitled Document"
 
 # --- GLOSSARY EXTRACTION (GPT-4.1 Responses API) ---
 def get_glossary_via_gpt41(full_text, max_terms=20):
@@ -256,7 +245,7 @@ if uploaded_file:
     with st.spinner("Extracting text from PDF..."):
         full_text = extract_text_from_pdf(uploaded_file)
         st.session_state.full_text = full_text
-        st.session_state.pdf_title = get_pdf_title(uploaded_file, full_text)
+        st.session_state.pdf_title = get_pdf_title_from_content(full_text)
     with st.spinner("Extracting glossary using GPT-4.1..."):
         glossary = get_glossary_via_gpt41(full_text, max_terms=20)
         st.session_state.glossary = glossary
