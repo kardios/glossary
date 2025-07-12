@@ -49,7 +49,7 @@ def get_pdf_title(pdf_file, full_text):
     try:
         prompt = (
             "Provide a concise, informative title (max 10 words) for the following document:\n"
-            + full_text[:2000]  # Only the first 2000 chars for context
+            + full_text[:2000]
         )
         response = client.responses.create(
             model="gpt-4.1",
@@ -100,7 +100,7 @@ def glossary_to_csv(glossary):
     df = pd.DataFrame(glossary)
     return df.to_csv(index=False)
 
-# --- D3 MINDMAP HTML WITH DRAGGING, CUSTOM ROOT ---
+# --- D3 MINDMAP HTML WITH DRAGGING AND TEXT WRAPPING ---
 def create_mindmap_html(glossary, root_title="Glossary"):
     nodes = [
         {"id": root_title, "group": 0}
@@ -168,13 +168,32 @@ def create_mindmap_html(glossary, root_title="Glossary"):
             }}
         }});
 
+    // Text wrapping for node labels
     node.append("text")
-        .attr("dy", ".35em")
-        .text(d => d.id)
-        .style("font-size", d => d.group === 0 ? "1.25em" : "1em")
-        .attr("y", d => d.group === 0 ? -6 : 0)
-        .style("pointer-events", "none")
-        .attr("text-anchor", "middle");
+        .attr("text-anchor", "middle")
+        .style("font-size", d => d.group === 0 ? "1.2em" : "1em")
+        .selectAll("tspan")
+        .data(d => {{
+            // Wrap lines to ~13 chars for child, ~22 for root
+            const maxChars = d.group === 0 ? 22 : 13;
+            const words = d.id.split(' ');
+            let lines = [];
+            let current = '';
+            words.forEach(word => {{
+                if ((current + ' ' + word).trim().length > maxChars) {{
+                    lines.push(current.trim());
+                    current = word;
+                }} else {{
+                    current += ' ' + word;
+                }}
+            }});
+            if (current.trim()) lines.push(current.trim());
+            return lines;
+        }})
+        .enter().append("tspan")
+        .attr("x", 0)
+        .attr("dy", (d, i) => i === 0 ? "0em" : "1.1em")
+        .text(d => d);
 
     // DRAG BEHAVIOR
     node.call(
