@@ -3,20 +3,22 @@ import fitz  # PyMuPDF
 import pandas as pd
 import json
 import tempfile
-import openai
+from openai import OpenAI
 from streamlit_js_eval import streamlit_js_eval
 
-# --- CONFIG ---
+# --- INIT OPENAI ---
+client = OpenAI()  # uses env OPENAI_API_KEY
+
 st.set_page_config(page_title="PDF Glossary Mindmap", layout="wide")
 st.title("🧠 PDF Glossary Mindmap Explorer")
 
-# --- SIDEBAR: PDF UPLOAD AND DOWNLOAD ---
+# --- PDF UPLOAD ---
 with st.sidebar:
     st.header("Upload PDF")
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
     st.write("---")
 
-# --- HELPER FUNCTIONS ---
+# --- PDF TEXT EXTRACTION ---
 def extract_text_from_pdf(pdf_file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
         tmpfile.write(pdf_file.read())
@@ -25,59 +27,49 @@ def extract_text_from_pdf(pdf_file):
         full_text = "\n\n".join(page.get_text() for page in doc)
     return full_text
 
+# --- GLOSSARY EXTRACTION (GPT-4.1, Responses API) ---
 def get_glossary_via_gpt41(full_text, max_terms=20):
-    prompt = f"""
-Extract up to {max_terms} key glossary terms from the following document.
-For each, provide a one-sentence definition or explanation as a tooltip.
-Return as a JSON array: [{{"term": "...", "tooltip": "..."}}, ...]
-Document:
----
-{full_text}
-    """
-    response = openai.ChatCompletion.create(
-        model="gpt-4-1106-preview",  # Or your GPT-4.1 deployment
-        messages=[
-            {"role": "system", "content": "You are a helpful glossary extractor."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.3,
-        max_tokens=1200
+    input_prompt = (
+        f"Extract up to {max_terms} key glossary terms from the following document.\n"
+        "For each, provide a one-sentence definition or explanation as a tooltip.\n"
+        "Return as a JSON array: [{\"term\": \"...\", \"tooltip\": \"...\"}, ...]\n"
+        "Document:\n"
+        "---\n"
+        f"{full_text}"
     )
-    glossary_json = response.choices[0].message.content
-    # Extract just the JSON part (sometimes LLM adds prose)
+    response = client.responses.create(
+        model="gpt-4.1",
+        input=input_prompt,
+    )
+    glossary_json = response.output_text
+    # Extract JSON from response (handle any preamble/epilogue)
     start = glossary_json.find('[')
     end = glossary_json.rfind(']')
     if start != -1 and end != -1:
         glossary_json = glossary_json[start:end+1]
-    glossary = json.loads(glossary_json)
-    return glossary
+    return json.loads(glossary_json)
 
-def get_summary_via_gpt4o(term, full_text):
-    prompt = f"""
-You are an expert assistant.
-
-Write a concise, one-paragraph explanation of the term "{term}" as used in the following document (do not mention page numbers).
-Include 2–3 reputable internet citations (with direct URLs as hyperlinks at the end).
-
-Document context:
----
-{full_text}
-    """
-    response = openai.ChatCompletion.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": "You are a helpful, concise academic assistant."},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.4,
-        max_tokens=400
+# --- SUMMARY WITH WEB SEARCH (GPT-4.1, Responses API) ---
+def get_summary_with_web_search(term, context_text=None):
+    base_prompt = (
+        f"Write a concise, one-paragraph explanation of the term '{term}'. "
+        "Include up-to-date, reputable internet citations (with direct URLs as hyperlinks) in your answer. "
     )
-    return response.choices[0].message.content
+    if context_text:
+        base_prompt += f"Use this as reference context (if helpful):\n{context_text}\n"
+    response = client.responses.create(
+        model="gpt-4.1",
+        tools=[{"type": "web_search_preview"}],  # Enables web search
+        input=base_prompt,
+    )
+    return response.output_text
 
+# --- CSV EXPORT ---
 def glossary_to_csv(glossary):
     df = pd.DataFrame(glossary)
     return df.to_csv(index=False)
 
+# --- D3 MINDMAP HTML ---
 def create_mindmap_html(glossary):
     nodes = [
         {"id": "Glossary", "group": 0}
@@ -234,18 +226,15 @@ if glossary:
 # --- MODAL SUMMARY ON TERM CLICK ---
 if st.session_state.get("clicked_term"):
     term = st.session_state.clicked_term
-    with st.spinner(f"Summarizing '{term}'..."):
-        summary = get_summary_via_gpt4o(term, full_text)
+    with st.spinner(f"Summarizing '{term}' (with web citations)..."):
+        summary = get_summary_with_web_search(term, full_text)
     st.markdown(f"### {term}")
     st.markdown(summary, unsafe_allow_html=True)
-    # Option to open PDF in browser (download if local)
     if uploaded_file:
         st.markdown(
             f'<a href="data:application/pdf;base64,{uploaded_file.getvalue().decode("ISO-8859-1")}" download="{uploaded_file.name}" target="_blank" style="font-weight:bold;">Open PDF</a>',
             unsafe_allow_html=True
         )
-    # Reset to avoid double-pop
     st.session_state.clicked_term = None
 
-st.caption("Powered by OpenAI GPT-4.1 and GPT-4o. © 2025")
-
+st.caption("Powered by OpenAI GPT-4.1 with live web search for term summaries. © 2025")
