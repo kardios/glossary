@@ -7,9 +7,10 @@ from openai import OpenAI
 import hashlib
 
 client = OpenAI()
-st.set_page_config(page_title="PDF Glossary Mindmap", layout="wide")
-st.title("🧠 PDF Glossary Mindmap Explorer")
+st.set_page_config(page_title="PDF Mindmap Explorer", layout="wide")
+st.title("🧠 PDF Bubble Map Explorer")
 
+# --- PDF TEXT EXTRACTION ---
 def extract_text_from_pdf(pdf_file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
         tmpfile.write(pdf_file.read())
@@ -17,6 +18,43 @@ def extract_text_from_pdf(pdf_file):
         doc = fitz.open(tmpfile.name)
         full_text = "\n\n".join(page.get_text() for page in doc)
     return full_text
+
+# --- PROMPTS ---
+MAX_TERMS = 16
+
+def prompt_glossary(full_text, max_terms=MAX_TERMS):
+    return (
+        f"Extract up to {max_terms} important glossary terms or concepts from the following document.\n"
+        "For each, provide a one-sentence definition as a tooltip.\n"
+        "Return as a JSON array: [{\"term\": \"...\", \"tooltip\": \"...\"}, ...]\n"
+        "Document:\n"
+        "---\n"
+        f"{full_text}"
+    )
+
+def prompt_hierarchical_bubble(full_text):
+    return (
+        "Summarize the main ideas in this document as a hierarchical mindmap, aiming for 2 to 3 levels of topics and subtopics if the structure allows. "
+        "Identify 3–6 major topics (first level). For each topic, list 2–4 key sub-ideas (second level). If helpful, you may add a third level for important details, but do not force an extra level if it does not fit the document’s structure. "
+        "For each node, provide a short tooltip. "
+        "Return as JSON like this:\n"
+        "{"
+        "\"title\": \"Document Title\","
+        "\"children\": ["
+        "  {"
+        "    \"name\": \"Main Topic 1\", \"tooltip\": \"...\", \"children\": ["
+        "      {\"name\": \"Sub-idea 1\", \"tooltip\": \"...\"},"
+        "      {\"name\": \"Sub-idea 2\", \"tooltip\": \"...\", \"children\": ["
+        "         {\"name\": \"Detail A\", \"tooltip\": \"...\"}"
+        "      ]}"
+        "    ]"
+        "  }"
+        "]"
+        "}\n"
+        "Document:\n"
+        "---\n"
+        f"{full_text}"
+    )
 
 def get_pdf_title_from_content(full_text, max_words=8, chunk_size=1000):
     chunk = ' '.join(full_text.split()[:chunk_size])
@@ -38,28 +76,32 @@ def get_pdf_title_from_content(full_text, max_words=8, chunk_size=1000):
     except Exception:
         return "Untitled Document"
 
-MAX_TERMS = 16
-
-def get_glossary_via_gpt41(full_text, max_terms=MAX_TERMS):
-    input_prompt = (
-        f"Extract up to {max_terms} key glossary terms from the following document.\n"
-        "For each, provide a one-sentence definition or explanation as a tooltip.\n"
-        "Return as a JSON array: [{\"term\": \"...\", \"tooltip\": \"...\"}, ...]\n"
-        "Document:\n"
-        "---\n"
-        f"{full_text}"
-    )
-    response = client.responses.create(
-        model="gpt-4.1",
-        input=input_prompt,
-    )
+# --- GLOSSARY & HIERARCHY GENERATION ---
+def get_glossary(full_text, max_terms=MAX_TERMS):
+    input_prompt = prompt_glossary(full_text, max_terms)
+    response = client.responses.create(model="gpt-4.1", input=input_prompt)
     glossary_json = response.output_text
     start = glossary_json.find('[')
     end = glossary_json.rfind(']')
     if start != -1 and end != -1:
         glossary_json = glossary_json[start:end+1]
     glossary = json.loads(glossary_json)
-    return glossary[:max_terms]  # Enforce hard cap
+    return glossary[:max_terms]
+
+def get_hierarchical_bubble(full_text):
+    prompt = prompt_hierarchical_bubble(full_text)
+    response = client.responses.create(model="gpt-4.1", input=prompt)
+    # Defensive: try to extract JSON object
+    raw = response.output_text
+    first = raw.find('{')
+    last = raw.rfind('}')
+    if first != -1 and last != -1:
+        try:
+            return json.loads(raw[first:last+1])
+        except Exception:
+            pass
+    # fallback: try to parse whatever's there
+    return {}
 
 def glossary_to_csv(glossary):
     df = pd.DataFrame([
@@ -68,7 +110,8 @@ def glossary_to_csv(glossary):
     ])
     return df.to_csv(index=False)
 
-def create_mindmap_html(glossary, root_title="Glossary"):
+# --- BUBBLE MAP RENDERING ---
+def create_glossary_mindmap_html(glossary, root_title="Glossary"):
     nodes = [
         {"id": root_title, "group": 0}
     ] + [
@@ -194,19 +237,111 @@ def create_mindmap_html(glossary, root_title="Glossary"):
     """
     return mindmap_html
 
-# --- SESSION STATE INIT ---
-if "file_hash" not in st.session_state:
-    st.session_state.file_hash = None
-if "glossary" not in st.session_state:
-    st.session_state.glossary = None
-if "full_text" not in st.session_state:
-    st.session_state.full_text = ""
-if "pdf_title" not in st.session_state:
-    st.session_state.pdf_title = None
+def create_hierarchical_bubble_html(tree_data):
+    # Uses D3.js "pack" layout for hierarchical bubble map
+    data_js = json.dumps(tree_data)
+    html = f"""
+    <div id="bubbletree"></div>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+    #bubbletree {{ width:100%; height:880px; min-height:700px; background:#f7faff; border-radius:18px; }}
+    .bubble-tooltip {{
+        position: absolute; pointer-events: none; background: #fff; border: 1.5px solid #4f7cda; border-radius: 8px;
+        padding: 10px 13px; font-size: 1em; color: #2c4274; box-shadow: 0 2px 12px rgba(60,100,180,0.15); z-index: 10;
+        opacity: 0; transition: opacity 0.18s; max-width: 330px;
+    }}
+    </style>
+    <script>
+    const data = {data_js};
+    const width = 1400, height = 900;
 
-# --- SIDEBAR: FILE UPLOAD ---
+    const svg = d3.select("#bubbletree").append("svg")
+        .attr("width", width)
+        .attr("height", height);
+
+    const root = d3.hierarchy(data)
+        .sum(d => 1)
+        .sort((a, b) => b.value - a.value);
+
+    const pack = d3.pack()
+        .size([width - 20, height - 20])
+        .padding(12);
+
+    pack(root);
+
+    const node = svg.selectAll("g")
+        .data(root.descendants())
+        .join("g")
+        .attr("transform", d => `translate(${{d.x+10}},${{d.y+10}})`);
+
+    node.append("circle")
+        .attr("r", d => d.r)
+        .attr("fill", d => d.depth === 0 ? "#eaf0fe" : d.children ? "#d6e4fb" : "#fff")
+        .attr("stroke", "#528fff")
+        .attr("stroke-width", d => d.depth === 0 ? 4 : 2)
+        .on("mouseover", function(e, d) {{
+            if (d.data.tooltip) {{
+                tooltip.style("opacity", 1)
+                  .html("<b>" + d.data.name + "</b><br>" + d.data.tooltip)
+                  .style("left", (e.pageX+12)+"px").style("top", (e.pageY-18)+"px");
+            }}
+        }})
+        .on("mousemove", function(e) {{
+            tooltip.style("left", (e.pageX+12)+"px").style("top", (e.pageY-18)+"px");
+        }})
+        .on("mouseout", function(e, d) {{
+            tooltip.style("opacity", 0);
+        }});
+
+    node.append("text")
+        .attr("text-anchor", "middle")
+        .attr("dy", "0.35em")
+        .style("font-size", d => d.depth === 0 ? "1.45em" : d.children ? "1.13em" : "1em")
+        .text(d => d.data.name)
+        .each(function(d) {{
+            const text = d3.select(this);
+            const maxChars = d.depth === 0 ? 14 : d.children ? 14 : 13;
+            const words = d.data.name.split(' ');
+            let lines = [];
+            let current = '';
+            words.forEach(word => {{
+                if ((current + ' ' + word).trim().length > maxChars) {{
+                    lines.push(current.trim());
+                    current = word;
+                }} else {{
+                    current += ' ' + word;
+                }}
+            }});
+            if (current.trim()) lines.push(current.trim());
+            const startDy = -((lines.length - 1) / 2) * 1.05;
+            lines.forEach((line, i) => {{
+                text.append("tspan")
+                    .attr("x", 0)
+                    .attr("dy", i === 0 ? `${{startDy}}em` : "1.09em")
+                    .text(line);
+            }});
+        }});
+
+    const tooltip = d3.select("body").append("div")
+        .attr("class", "bubble-tooltip");
+    </script>
+    """
+    return html
+
+# --- SESSION STATE INIT ---
+for key in ["file_hash", "full_text", "pdf_title", "glossary", "hierarchical", "view_mode"]:
+    if key not in st.session_state:
+        st.session_state[key] = None
+
+# --- SIDEBAR: FILE UPLOAD & VIEW SELECT ---
 with st.sidebar:
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
+    view_mode = st.radio(
+        "Show as:",
+        ["Glossary Bubble Map", "Hierarchical Bubble Map"],
+        index=0,
+        key="view_mode"
+    )
     st.write("---")
 
 def compute_file_hash(file_obj):
@@ -215,6 +350,7 @@ def compute_file_hash(file_obj):
     file_obj.seek(0)
     return hashlib.md5(data).hexdigest()
 
+# --- PDF PROCESSING & LLM GENERATION ---
 if uploaded_file:
     file_hash = compute_file_hash(uploaded_file)
     if st.session_state.file_hash != file_hash:
@@ -223,28 +359,35 @@ if uploaded_file:
             full_text = extract_text_from_pdf(uploaded_file)
             st.session_state.full_text = full_text
             st.session_state.pdf_title = get_pdf_title_from_content(full_text)
-        with st.spinner("Extracting glossary using GPT-4.1..."):
-            glossary = get_glossary_via_gpt41(full_text, max_terms=MAX_TERMS)
-            st.session_state.glossary = glossary
+        with st.spinner("Extracting glossary terms..."):
+            st.session_state.glossary = get_glossary(st.session_state.full_text, MAX_TERMS)
+        with st.spinner("Extracting document hierarchy..."):
+            st.session_state.hierarchical = get_hierarchical_bubble(st.session_state.full_text)
 
+# --- MAIN AREA: VISUALIZATION ---
 glossary = st.session_state.get("glossary")
 pdf_title = st.session_state.get("pdf_title", "Document")
+hierarchical = st.session_state.get("hierarchical")
+view_mode = st.session_state.get("view_mode", "Glossary Bubble Map")
 
-# --- SIDEBAR: CSV DOWNLOAD ---
-if glossary:
-    csv_data = glossary_to_csv(glossary)
-    with st.sidebar:
-        st.download_button(
-            label="Download Glossary as CSV",
-            data=csv_data,
-            file_name="glossary.csv",
-            mime="text/csv"
-        )
-
-# --- MAIN: MINDMAP ---
-if glossary:
-    st.subheader(f"Glossary Mindmap (Root: {pdf_title})")
-    mindmap_html = create_mindmap_html(glossary, root_title=pdf_title)
-    st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
+if uploaded_file and glossary:
+    st.subheader(f"{view_mode} (Root: {pdf_title})")
+    if view_mode == "Glossary Bubble Map":
+        csv_data = glossary_to_csv(glossary)
+        with st.sidebar:
+            st.download_button(
+                label="Download Glossary as CSV",
+                data=csv_data,
+                file_name="glossary.csv",
+                mime="text/csv"
+            )
+        mindmap_html = create_glossary_mindmap_html(glossary, root_title=pdf_title)
+        st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
+    elif view_mode == "Hierarchical Bubble Map":
+        if hierarchical and hierarchical.get("children"):
+            treemap_html = create_hierarchical_bubble_html(hierarchical)
+            st.components.v1.html(treemap_html, height=900, width=1450, scrolling=False)
+        else:
+            st.info("No hierarchical structure was extracted.")
 
 st.caption("Powered by OpenAI GPT-4.1. © 2025")
