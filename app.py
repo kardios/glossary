@@ -42,9 +42,7 @@ def get_pdf_title_from_content(full_text, max_words=8, chunk_size=1000):
             input=prompt,
         )
         short_title = response.output_text.strip().split("\n")[0]
-        # Enforce word limit
         short_title = ' '.join(short_title.split()[:max_words])
-        # Extra guard: avoid empty or generic
         if not short_title or "please provide" in short_title.lower():
             return "Untitled Document"
         return short_title
@@ -268,7 +266,7 @@ if glossary:
 if glossary:
     st.subheader(f"Glossary Mindmap (Root: {pdf_title})")
     mindmap_html = create_mindmap_html(glossary, root_title=pdf_title)
-    st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False)
+    st.components.v1.html(mindmap_html, height=900, width=1450, scrolling=False, allow_scripts=True)
 
     # Listen for JS bubble click events
     clicked_term = streamlit_js_eval(
