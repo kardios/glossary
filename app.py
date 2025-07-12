@@ -4,6 +4,7 @@ import pandas as pd
 import json
 import tempfile
 from openai import OpenAI
+import hashlib
 
 client = OpenAI()
 st.set_page_config(page_title="PDF Glossary Mindmap", layout="wide")
@@ -38,7 +39,9 @@ def get_pdf_title_from_content(full_text, max_words=8, chunk_size=1000):
     except Exception:
         return "Untitled Document"
 
-def get_glossary_via_gpt41(full_text, max_terms=16):
+MAX_TERMS = 16
+
+def get_glossary_via_gpt41(full_text, max_terms=MAX_TERMS):
     input_prompt = (
         f"Extract up to {max_terms} key glossary terms from the following document.\n"
         "For each, provide a one-sentence definition or explanation as a tooltip.\n"
@@ -56,7 +59,8 @@ def get_glossary_via_gpt41(full_text, max_terms=16):
     end = glossary_json.rfind(']')
     if start != -1 and end != -1:
         glossary_json = glossary_json[start:end+1]
-    return json.loads(glossary_json)
+    glossary = json.loads(glossary_json)
+    return glossary[:max_terms]  # Enforce hard cap
 
 def get_summary_with_web_search(term, context_text=None):
     base_prompt = (
@@ -205,7 +209,9 @@ def create_mindmap_html(glossary, root_title="Glossary"):
     """
     return mindmap_html
 
-# --- SESSION STATE ---
+# --- SESSION STATE INIT ---
+if "file_hash" not in st.session_state:
+    st.session_state.file_hash = None
 if "glossary" not in st.session_state:
     st.session_state.glossary = None
 if "full_text" not in st.session_state:
@@ -215,31 +221,41 @@ if "pdf_title" not in st.session_state:
 if "summaries" not in st.session_state:
     st.session_state.summaries = None
 
-# --- MAIN WORKFLOW ---
+# --- SIDEBAR: FILE UPLOAD ---
 with st.sidebar:
     uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
     st.write("---")
 
+# --- DETECT NEW FILE UPLOAD (using hash) ---
+def compute_file_hash(file_obj):
+    file_obj.seek(0)
+    data = file_obj.read()
+    file_obj.seek(0)
+    return hashlib.md5(data).hexdigest()
+
 if uploaded_file:
-    with st.spinner("Extracting text from PDF..."):
-        full_text = extract_text_from_pdf(uploaded_file)
-        st.session_state.full_text = full_text
-        st.session_state.pdf_title = get_pdf_title_from_content(full_text)
-    with st.spinner("Extracting glossary using GPT-4.1..."):
-        glossary = get_glossary_via_gpt41(full_text, max_terms=16)
-        st.session_state.glossary = glossary
-    with st.spinner("Pre-generating all summaries (with web citations)..."):
-        summaries = {}
-        N = len(glossary)
-        progress_bar = st.progress(0, text="Generating summaries...")
-        for idx, item in enumerate(glossary, 1):
-            try:
-                summaries[item["term"]] = get_summary_with_web_search(item["term"], full_text)
-            except Exception as e:
-                summaries[item["term"]] = "Error generating summary."
-            progress_bar.progress(idx/N, text=f"Generating summaries... ({idx}/{N})")
-        progress_bar.empty()
-        st.session_state.summaries = summaries
+    file_hash = compute_file_hash(uploaded_file)
+    if st.session_state.file_hash != file_hash:
+        st.session_state.file_hash = file_hash
+        with st.spinner("Extracting text from PDF..."):
+            full_text = extract_text_from_pdf(uploaded_file)
+            st.session_state.full_text = full_text
+            st.session_state.pdf_title = get_pdf_title_from_content(full_text)
+        with st.spinner("Extracting glossary using GPT-4.1..."):
+            glossary = get_glossary_via_gpt41(full_text, max_terms=MAX_TERMS)
+            st.session_state.glossary = glossary
+        with st.spinner("Pre-generating all summaries (with web citations)..."):
+            summaries = {}
+            N = len(glossary)
+            progress_bar = st.progress(0, text="Generating summaries...")
+            for idx, item in enumerate(glossary, 1):
+                try:
+                    summaries[item["term"]] = get_summary_with_web_search(item["term"], full_text)
+                except Exception:
+                    summaries[item["term"]] = "Error generating summary."
+                progress_bar.progress(idx/N, text=f"Generating summaries... ({idx}/{N})")
+            progress_bar.empty()
+            st.session_state.summaries = summaries
 
 glossary = st.session_state.get("glossary")
 pdf_title = st.session_state.get("pdf_title", "Document")
