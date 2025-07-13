@@ -339,6 +339,24 @@ def create_multilevel_mindmap_html(tree, center_title="Root", mode="concept"):
     """
     return mindmap_html
 
+# --- HTML WRAPPER FOR DOWNLOAD ---
+def full_html_wrap(mindmap_html, title="Bubble Mindmap Explorer"):
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{title}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {{ margin:0; background:#f7faff; font-family:sans-serif; }}
+  </style>
+</head>
+<body>
+{mindmap_html}
+</body>
+</html>
+"""
+
 # --- EXPORT FORMATTING ---
 def concept_map_txt(glossary):
     txt = ""
@@ -400,6 +418,10 @@ if uploaded_file:
     file_hash = compute_file_hash(uploaded_file)
     if st.session_state.file_hash != file_hash:
         st.session_state.file_hash = file_hash
+
+        # Clear the log for each new file
+        log_msgs.clear()
+        log_box.markdown("### Log")
 
         # Step 1: Extract text
         log("📄 Extracting text from PDF...")
@@ -467,6 +489,15 @@ if uploaded_file and concept_map and structure_map and argument_map:
             file_name="concept_map.txt",
             mime="text/plain"
         )
+        # --- HTML download button ---
+        html_file = full_html_wrap(mindmap_html, title=f"BubbleMap - {pdf_title} (Concept Map)")
+        st.sidebar.download_button(
+            label="Download Concept Map as HTML",
+            data=html_file.encode("utf-8"),
+            file_name="concept_map.html",
+            mime="text/html"
+        )
+
     elif view_mode == "Structure Map":
         if structure_map and structure_map.get("children"):
             mindmap_html = create_multilevel_mindmap_html(structure_map, center_title=structure_map.get("name", "Root"), mode="structure")
@@ -478,8 +509,17 @@ if uploaded_file and concept_map and structure_map and argument_map:
                 file_name="structure_map.txt",
                 mime="text/plain"
             )
+            # --- HTML download button ---
+            html_file = full_html_wrap(mindmap_html, title=f"BubbleMap - {pdf_title} (Structure Map)")
+            st.sidebar.download_button(
+                label="Download Structure Map as HTML",
+                data=html_file.encode("utf-8"),
+                file_name="structure_map.html",
+                mime="text/html"
+            )
         else:
             st.info("No structure was extracted.")
+
     elif view_mode == "Argument Map":
         if argument_map and argument_map.get("children"):
             mindmap_html = create_multilevel_mindmap_html(argument_map, center_title=argument_map.get("name", "Root"), mode="argument")
@@ -490,6 +530,14 @@ if uploaded_file and concept_map and structure_map and argument_map:
                 data=txt_data,
                 file_name="argument_map.txt",
                 mime="text/plain"
+            )
+            # --- HTML download button ---
+            html_file = full_html_wrap(mindmap_html, title=f"BubbleMap - {pdf_title} (Argument Map)")
+            st.sidebar.download_button(
+                label="Download Argument Map as HTML",
+                data=html_file.encode("utf-8"),
+                file_name="argument_map.html",
+                mime="text/html"
             )
         else:
             st.info("No argument structure was extracted.")
