@@ -9,7 +9,7 @@ import time
 
 client = OpenAI()
 
-st.set_page_config(page_title="Bubble Mindmap Explorer", layout="wide")
+st.set_page_config(page_title="BubbleMap", layout="wide")
 st.title("🧠 Bubble Mindmap Explorer")
 
 MAX_TERMS = 16
